@@ -2,7 +2,6 @@
 #define _SFHIP_H
 
 #include <stdint.h>
-#include <string.h> // for memcpy
 
 // General coding considerations:
 //  1. Consider something like RISC-V where the first 5 parameters are passed
@@ -71,6 +70,8 @@ HIPSTATIC_ASSERT( ((HIP_PHY_HEADER_LENGTH_BYTES)&3 ) == 0,
 // For fixed IPs, this compiles to a constant number.
 #define HIPIP( a, b, c, d ) \
 	HIPHTONL((((d)&0xff)<<24)|(((c)&0xff)<<16)|(((b)&0xff)<<8)|((a)&0xff))
+
+#define HIPMACCOPY(a,b) { ((uint32_t*)a)[0] = ((uint32_t*)b)[0]; ((uint16_t*)a)[2] = ((uint16_t*)b)[2]; } 
 
 typedef uint8_t hipmac[6];
 typedef hipbe32 sfhip_address;
@@ -182,8 +183,8 @@ hipmac sfhip_mac_broadcast = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 int sfhip_mac_reply( struct sfhip * hip, struct sfhip_phy_packet * data, int length )
 {
 	struct sfhip_mac_header * mac = &data->mac_header;
-	memcpy( &mac->destination, &mac->source, sizeof( hipmac ) );
-	memcpy( &mac->source, &hip->self_mac, sizeof( hipmac ) );
+	HIPMACCOPY( mac->destination, mac->source );
+	HIPMACCOPY( mac->source, hip->self_mac );
 	return sfhip_send_packet( hip, data, length );
 }
 
@@ -336,8 +337,9 @@ int sfhip_accept_packet( struct sfhip * hip, struct sfhip_phy_packet * data, int
 				return 0;
 
 			// Edit ARP and send it back.
-			memcpy( &arp->target, &arp->sender, sizeof( hipmac ) + sizeof( sfhip_address ) );
-			memcpy( &arp->sender, &hip->self_mac, sizeof( hipmac ) );
+			HIPMACCOPY( arp->target, arp->sender );
+			arp->tproto = arp->sproto;
+			HIPMACCOPY( arp->sender, hip->self_mac );
 			arp->sproto = hip->ip;
 			arp->operation = HIPHTONS( 0x02 );
 
