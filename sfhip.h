@@ -59,19 +59,22 @@
 #define HIPALIGN32 __attribute__((aligned(4)))
 #define HIPPACK32 HIPALIGN32 __attribute__((packed))
 #define HIPPACK __attribute__((packed))
-
+#define HIPMACSTR "%02x:%02x:%02x:%02x:%02x:%02x"
+#define HIPMACV( x ) x.mac[0], x.mac[1], x.mac[2], x.mac[3], x.mac[4], x.mac[5]
 ///////////////////////////////////////////////////////////////////////////////
 
 // For fixed IPs, this compiles to a constant number.
 #define HIPIP( a, b, c, d ) \
 	HIPHTONL((((d)&0xff)<<24)|(((c)&0xff)<<16)|(((b)&0xff)<<8)|((a)&0xff))
 
-#define HIPMACCOPY(a,b) { ((uint32_t*)a)[0] = ((uint32_t*)b)[0]; ((uint16_t*)a)[2] = ((uint16_t*)b)[2]; } 
+typedef struct HIPPACK
+{
+	uint8_t mac[6];
+} hipmac;
 
-typedef uint8_t hipmac[6];
 typedef hipbe32 sfhip_address;
 
-struct sfhip_ip_header
+typedef struct HIPPACK
 {
 	uint8_t version_ihl;
 	uint8_t dscp_ecn;
@@ -84,9 +87,9 @@ struct sfhip_ip_header
 	hipbe32 source_address;
 	hipbe32 destination_address;
 	// Possibly more fields, check IHL in flags.
-} HIPPACK;
+} sfhip_ip_header;
 
-struct sfhip_mac_header
+typedef struct HIPPACK
 {
 	hipmac destination;
 	hipmac source;
@@ -94,25 +97,25 @@ struct sfhip_mac_header
 	//struct sfhip_ip_header ip_header HIPALIGN32;
 	//struct sfhip_arp_header arp_header HIPALIGN32;
 	// etc...
-} HIPPACK;
+} sfhip_mac_header;
 
 #define HIPMACPAYLOAD( m )  (((void*)m)+14)
 
-struct sfhip_phy_packet
+typedef struct HIPPACK
 {
 	uint8_t phy_header[HIP_PHY_HEADER_LENGTH_BYTES];
-	struct sfhip_mac_header mac_header;
-} HIPPACK;
+	sfhip_mac_header mac_header;
+} sfhip_phy_packet;
 
-struct sfhip_udp_header
+typedef struct HIPPACK
 {
 	hipbe16 source_port;
 	hipbe16 destination_port;
 	hipbe16 length;
 	hipbe16 checksum;
-} HIPPACK;
+} sfhip_udp_header;
 
-struct sfhip_arp_header
+typedef struct HIPPACK
 {
 	hipbe16 hwtype;
 	hipbe16 protocol;
@@ -123,37 +126,37 @@ struct sfhip_arp_header
 	sfhip_address sproto;
 	hipmac  target;
 	sfhip_address tproto;	
-} HIPPACK;
+} sfhip_arp_header;
 
-struct sfhip_icmp_header
+typedef struct HIPPACK
 {
 	uint8_t type;
 	uint8_t code;
 	hipbe16 csum;
 	hipbe16 identifier;
 	hipbe16 sequence;
-} HIPPACK;
+} sfhip_icmp_header;
 
-struct sfhip_tcp_socket
+typedef struct
 {
 	
-};
+} sfhip_tcp_socket;
 
-struct sfhip
+typedef struct
 {
 	hipmac self_mac;
 	sfhip_address ip;
 	sfhip_address mask;
 	sfhip_address gateway;
 	void * opaque;
-};
+}  sfhip;
 
 
 // You must call.
-int sfhip_accept_packet( struct sfhip * hip, struct sfhip_phy_packet * data, int length );
+int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet * data, int length );
 
 // You must implement.
-int sfhip_send_packet( struct sfhip * hip, struct sfhip_phy_packet * data, int length );
+int sfhip_send_packet( sfhip * hip, sfhip_phy_packet * data, int length );
 
 // Constants
 extern hipmac sfhip_mac_broadcast;
@@ -162,8 +165,8 @@ extern hipmac sfhip_mac_broadcast;
 // Available functions
 
 // Shortcuts to reply-to-sender.
-int sfhip_mac_reply( struct sfhip * hip, struct sfhip_phy_packet * data, int length );
-int sfhip_ip_reply( struct sfhip * hip, struct sfhip_phy_packet * data, int length );
+int sfhip_mac_reply( sfhip * hip, sfhip_phy_packet * data, int length );
+int sfhip_ip_reply( sfhip * hip, sfhip_phy_packet * data, int length );
 
 hipbe16 internet_checksum( uint8_t * data, int length );
 
@@ -174,18 +177,18 @@ hipbe16 internet_checksum( uint8_t * data, int length );
 
 hipmac sfhip_mac_broadcast = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
-int sfhip_mac_reply( struct sfhip * hip, struct sfhip_phy_packet * data, int length )
+int sfhip_mac_reply( sfhip * hip, sfhip_phy_packet * data, int length )
 {
-	struct sfhip_mac_header * mac = &data->mac_header;
-	HIPMACCOPY( mac->destination, mac->source );
-	HIPMACCOPY( mac->source, hip->self_mac );
+	sfhip_mac_header * mac = &data->mac_header;
+	mac->destination = mac->source;
+	mac->source = hip->self_mac;
 	return sfhip_send_packet( hip, data, length );
 }
 
-int sfhip_ip_reply( struct sfhip * hip, struct sfhip_phy_packet * data, int length )
+int sfhip_ip_reply( sfhip * hip, sfhip_phy_packet * data, int length )
 {
-	struct sfhip_mac_header * mac = &data->mac_header;
-	struct sfhip_ip_header * iph = (void*)(mac+1);
+	sfhip_mac_header * mac = &data->mac_header;
+	sfhip_ip_header * iph = (void*)(mac+1);
 	iph->destination_address = iph->source_address;
 	iph->source_address = hip->ip;
 	return sfhip_mac_reply( hip, data, length );
@@ -206,12 +209,12 @@ hipbe16 sfhip_internet_checksum( uint16_t * data, int length )
 	return ( ((uint16_t)~sum) );
 }
 
-int sfhip_handle_udp( struct sfhip * hip, struct sfhip_phy_packet * data, int length,
+int sfhip_handle_udp( sfhip * hip, sfhip_phy_packet * data, int length,
 	void * ip_payload, int ip_payload_length )
 {
-	struct sfhip_udp_header * udp = ip_payload;
+	sfhip_udp_header * udp = ip_payload;
 
-	int payload_remain = ip_payload_length - sizeof(struct sfhip_udp_header);
+	int payload_remain = ip_payload_length - sizeof(sfhip_udp_header);
 
 	if( payload_remain < 0 ) return -1;
 
@@ -239,28 +242,28 @@ int sfhip_handle_udp( struct sfhip * hip, struct sfhip_phy_packet * data, int le
 	return 0;
 }
 
-int sfhip_accept_packet( struct sfhip * hip, struct sfhip_phy_packet * data, int length )
+int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet * data, int length )
 {
 	// Make sure packet is not a runt frame.  This includes the PHY and etherlink frame.
-	int payload_length = length - sizeof(struct sfhip_phy_packet);
+	int payload_length = length - sizeof(sfhip_phy_packet);
 
 	if( payload_length < 0 )
 		return -1;
 
-	struct sfhip_mac_header * mac = &data->mac_header;
+	sfhip_mac_header * mac = &data->mac_header;
 
 	int ethertype_be = mac->ethertype;
 
 	// Filter for IP4.
 	if( ethertype_be == HIPHTONS( 0x0800 ) )
 	{
-		payload_length -= sizeof(struct sfhip_ip_header);
+		payload_length -= sizeof(sfhip_ip_header);
 
 		if( payload_length < 0 )
 			return -1;
 
 		// Assume phy_header is opaque to us.
-		struct sfhip_ip_header * iph = HIPMACPAYLOAD( mac );
+		sfhip_ip_header * iph = HIPMACPAYLOAD( mac );
 
 		int hlen = (iph->version_ihl & 0xf)<<2;
 		int version = iph->version_ihl >> 4;
@@ -289,10 +292,10 @@ int sfhip_accept_packet( struct sfhip * hip, struct sfhip_phy_packet * data, int
 		{
 		case 1: // IPPROTO_ICMP
 		{
-			if( ip_payload_length < sizeof( struct sfhip_icmp_header ) )
+			if( ip_payload_length < sizeof( sfhip_icmp_header ) )
 				return -1;
 
-			struct sfhip_icmp_header * icmp = ip_payload;
+			sfhip_icmp_header * icmp = ip_payload;
 
 			// Only handle requests, no replies yet.
 			if( icmp->type == 8 )
@@ -315,9 +318,9 @@ int sfhip_accept_packet( struct sfhip * hip, struct sfhip_phy_packet * data, int
 	else if( ethertype_be == HIPHTONS( 0x0806 ) )
 	{
 		// ARP packet
-		struct sfhip_arp_header * arp = HIPMACPAYLOAD( mac );
+		sfhip_arp_header * arp = HIPMACPAYLOAD( mac );
 
-		payload_length -= sizeof(struct sfhip_arp_header);
+		payload_length -= sizeof(sfhip_arp_header);
 
 		if( payload_length < 0 )
 			return -1;
@@ -331,9 +334,9 @@ int sfhip_accept_packet( struct sfhip * hip, struct sfhip_phy_packet * data, int
 				return 0;
 
 			// Edit ARP and send it back.
-			HIPMACCOPY( arp->target, arp->sender );
+			arp->target = arp->sender;
 			arp->tproto = arp->sproto;
-			HIPMACCOPY( arp->sender, hip->self_mac );
+			arp->sender = hip->self_mac;
 			arp->sproto = hip->ip;
 			arp->operation = HIPHTONS( 0x02 );
 
@@ -361,9 +364,9 @@ int sfhip_accept_packet( struct sfhip * hip, struct sfhip_phy_packet * data, int
 HIPSTATIC_ASSERT( ((HIP_PHY_HEADER_LENGTH_BYTES)&3 ) == 0,
 	"HIP_PHY_HEADER_LENGTH_BYTES must be divisible by 4" );
 
-HIPSTATIC_ASSERT( sizeof( struct sfhip_phy_packet ) == sizeof( struct sfhip_mac_header ) + HIP_PHY_HEADER_LENGTH_BYTES, "phy packet misalignment" );
-HIPSTATIC_ASSERT( sizeof( struct sfhip_mac_header ) == 14, "mac packet size incorrect" );
-HIPSTATIC_ASSERT( sizeof( struct sfhip_arp_header ) == 28, "arp packet size incorrect" );
+HIPSTATIC_ASSERT( sizeof( sfhip_phy_packet ) == sizeof( sfhip_mac_header ) + HIP_PHY_HEADER_LENGTH_BYTES, "phy packet misalignment" );
+HIPSTATIC_ASSERT( sizeof( sfhip_mac_header ) == 14, "mac packet size incorrect" );
+HIPSTATIC_ASSERT( sizeof( sfhip_arp_header ) == 28, "arp packet size incorrect" );
 
 
 #endif

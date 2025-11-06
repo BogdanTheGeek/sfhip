@@ -29,7 +29,7 @@ int fdtap, fddev;
 uint8_t mymac_dev[6];
 uint8_t mymac_tap[6];
 
-int sfhip_send_packet( struct sfhip * hip, struct sfhip_phy_packet * data, int length )
+int sfhip_send_packet( sfhip * hip, sfhip_phy_packet * data, int length )
 {
 	if( length < 18 ) return -1;
 	uint8_t * dpl = (uint8_t*)data;
@@ -82,7 +82,7 @@ int main( int argc, char ** argv )
 	if( argc < 3 )
 		goto failhelp;
 
-	struct sfhip hip = {
+	sfhip hip = {
 		.ip = HIPIP( 192, 168, 13, 251 ),
 		.mask = HIPIP( 255, 255, 255, 0 ),
 		.gateway = HIPIP( 192, 168, 13, 1 ),
@@ -208,7 +208,7 @@ int main( int argc, char ** argv )
 				int r = read( fds[i].fd, buf + offset, 2048 );
 				if( r < 0 )
 					FAIL( "read() failed %s\n", strerror( errno ) );
-				sfhip_accept_packet( &hip, (struct sfhip_phy_packet *)buf, r + offset );
+				sfhip_accept_packet( &hip, (sfhip_phy_packet *)buf, r + offset );
 			}
 		}
 #if 0
