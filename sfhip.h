@@ -60,11 +60,6 @@
 #define HIPPACK32 HIPALIGN32 __attribute__((packed))
 #define HIPPACK __attribute__((packed))
 
-// Configuration asserts
-
-HIPSTATIC_ASSERT( ((HIP_PHY_HEADER_LENGTH_BYTES)&3 ) == 0,
-	"HIP_PHY_HEADER_LENGTH_BYTES must be divisible by 4" );
-
 ///////////////////////////////////////////////////////////////////////////////
 
 // For fixed IPs, this compiles to a constant number.
@@ -154,10 +149,6 @@ struct sfhip
 };
 
 
-HIPSTATIC_ASSERT( sizeof( struct sfhip_phy_packet ) == sizeof( struct sfhip_mac_header ) + HIP_PHY_HEADER_LENGTH_BYTES, "phy packet misalignment" );
-HIPSTATIC_ASSERT( sizeof( struct sfhip_mac_header ) == 14, "mac packet size incorrect" );
-HIPSTATIC_ASSERT( sizeof( struct sfhip_arp_header ) == 28, "arp packet size incorrect" );
-
 // You must call.
 int sfhip_accept_packet( struct sfhip * hip, struct sfhip_phy_packet * data, int length );
 
@@ -175,6 +166,9 @@ int sfhip_mac_reply( struct sfhip * hip, struct sfhip_phy_packet * data, int len
 int sfhip_ip_reply( struct sfhip * hip, struct sfhip_phy_packet * data, int length );
 
 hipbe16 internet_checksum( uint8_t * data, int length );
+
+
+
 
 #ifdef SFHIP_IMPLEMENTATION
 
@@ -361,6 +355,16 @@ int sfhip_accept_packet( struct sfhip * hip, struct sfhip_phy_packet * data, int
 }
 
 #endif
+
+// Configuration asserts
+
+HIPSTATIC_ASSERT( ((HIP_PHY_HEADER_LENGTH_BYTES)&3 ) == 0,
+	"HIP_PHY_HEADER_LENGTH_BYTES must be divisible by 4" );
+
+HIPSTATIC_ASSERT( sizeof( struct sfhip_phy_packet ) == sizeof( struct sfhip_mac_header ) + HIP_PHY_HEADER_LENGTH_BYTES, "phy packet misalignment" );
+HIPSTATIC_ASSERT( sizeof( struct sfhip_mac_header ) == 14, "mac packet size incorrect" );
+HIPSTATIC_ASSERT( sizeof( struct sfhip_arp_header ) == 28, "arp packet size incorrect" );
+
 
 #endif
 
