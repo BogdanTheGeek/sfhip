@@ -38,8 +38,7 @@ int sfhip_send_packet( sfhip * hip, sfhip_phy_packet * data, int length )
 
 #if 0
 	printf( "TX %4d: ", length );
-	int i;
-	for( i = 0; i < length; i++ )
+	for( int i = 0; i < length; i++ )
 	{
 		if( (i & 0xf) == 0 && i ) printf( "\n         " );
 		printf( "%02x ", dpl[i] );
@@ -82,6 +81,7 @@ int main( int argc, char ** argv )
 	if( argc < 3 )
 		goto failhelp;
 
+	#define TAP_ADDR "192.168.13.252"
 	sfhip hip = {
 		.ip = HIPIP( 192, 168, 13, 251 ),
 		.mask = HIPIP( 255, 255, 255, 0 ),
@@ -113,11 +113,25 @@ int main( int argc, char ** argv )
 				FAIL("TUNSETIFF failed %s\n", strerror( errno ) );
 
 			int sockup = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-			struct ifreq ifr_ifup = { .ifr_flags = (istap?IFF_TAP:IFF_TUN) };
+
+			struct ifreq ifr_ifup = { 0 };
+			ifr.ifr_flags = 0;
+			((struct sockaddr_in *)&ifr.ifr_addr)->sin_family = AF_INET;
+			((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr = inet_addr(TAP_ADDR);
+			if(( ioctl( sockup, SIOCSIFADDR, (void*)&ifr)) == -1 )
+				FAIL( "SIOCSIFADDR failed %s\n", strerror(errno) );
+
+			ifr_ifup.ifr_flags = (istap?IFF_TAP:IFF_TUN);
 			strncpy(ifr_ifup.ifr_name, devname, IFNAMSIZ);
 			ifr_ifup.ifr_flags = IFF_UP|IFF_BROADCAST|IFF_RUNNING|IFF_MULTICAST;
 			if(( ioctl(sockup, SIOCSIFFLAGS, (void*)&ifr_ifup)) == -1)
 				FAIL("SIOCSIFFLAGS failed %s\n", strerror( errno ) );
+			if(( ioctl(sockup, SIOCSIFFLAGS, (void*)&ifr_ifup)) == -1)
+				FAIL("SIOCSIFFLAGS failed %s\n", strerror( errno ) );
+
+
+			// Also need to configrue its IP
+
 			close( sockup );
 
 			struct ifreq ifr_mac = { 0 };
@@ -198,8 +212,7 @@ int main( int argc, char ** argv )
 		int r = poll( fds, 2, 10000 );
 		if( r < 0 ) FAIL( "Fail on poll" );
 
-		int i;
-		for( i = 0; i < 2; i++ )
+		for( int i = 0; i < 2; i++ )
 		{
 			if( fds[i].fd && ( fds[i].revents & POLLIN ) )
 			{
@@ -213,8 +226,7 @@ int main( int argc, char ** argv )
 		}
 #if 0
 		printf( "%4d: ", r );
-		int i;
-		for( i = 0; i < r; i++ )
+		for( int i = 0; i < r; i++ )
 		{
 			if( (i & 0xf) == 0 && i ) printf( "\n      " );
 			printf( "%02x ", buf[i] );

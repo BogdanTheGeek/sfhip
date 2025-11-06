@@ -99,8 +99,6 @@ typedef struct HIPPACK
 	// etc...
 } sfhip_mac_header;
 
-#define HIPMACPAYLOAD( m )  (((void*)m)+14)
-
 typedef struct HIPPACK
 {
 	uint8_t phy_header[HIP_PHY_HEADER_LENGTH_BYTES];
@@ -197,7 +195,6 @@ int sfhip_ip_reply( sfhip * hip, sfhip_phy_packet * data, int length )
 hipbe16 sfhip_internet_checksum( uint16_t * data, int length )
 {
 	uint32_t sum = 0;
-	int i;
 	uint16_t * end = data + (length>>1);
 	for( ; data != end; data++ )
 		sum += *data;
@@ -227,8 +224,10 @@ int sfhip_handle_udp( sfhip * hip, sfhip_phy_packet * data, int length,
 		return -1;
 	}
 
+	// Build pseudo-header for checksum.
+	// TODO: Should we configure option for no UDP checksums?
 	uint16_t * csumstart = ip_payload - 12;
-	csumstart[0] = 17<<8;
+	csumstart[0] = 17<<8; // IPPROTO_UDP
 	csumstart[1] = udp->length;
 	uint16_t ccsum = sfhip_internet_checksum( csumstart, ip_payload_length + 12 );
 	if( ccsum )
@@ -263,7 +262,7 @@ int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet * data, int length )
 			return -1;
 
 		// Assume phy_header is opaque to us.
-		sfhip_ip_header * iph = HIPMACPAYLOAD( mac );
+		sfhip_ip_header * iph = (void*)( mac+1 );
 
 		int hlen = (iph->version_ihl & 0xf)<<2;
 		int version = iph->version_ihl >> 4;
@@ -318,7 +317,7 @@ int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet * data, int length )
 	else if( ethertype_be == HIPHTONS( 0x0806 ) )
 	{
 		// ARP packet
-		sfhip_arp_header * arp = HIPMACPAYLOAD( mac );
+		sfhip_arp_header * arp = (void*)( mac+1 );
 
 		payload_length -= sizeof(sfhip_arp_header);
 
