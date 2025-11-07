@@ -2,6 +2,8 @@ all : linuxtest
 
 linuxtest : linuxtest.c
 	gcc -Os -g -o $@ $^ -flto
+	objdump -t linuxtest | grep hip | tr -s ' ' | cut -f 4 -d' ' | cut -f 2 | sed -e 's/^0*//' | tr '[:lower:]' '[:upper:]' | sed -e 's/^/+/' | xargs echo "obase=10;ibase=16;0"  | bc | xargs echo "Total Size Bytes For hip Functions:"
+
 
 testprom : linuxtest
 	echo "Be sure to give tap1 an ip!"
