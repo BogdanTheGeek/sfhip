@@ -228,9 +228,10 @@ int main( int argc, char ** argv )
 			{ .fd = fddev, .events = POLLIN },
 			{ .fd = fdtap, .events = POLLIN }
 		};
-
+printf( "Entering Poll\n" ); fflush(stdout);
 		int r = poll( fds, 2, 10 );
 		if( r < 0 ) FAIL( "Fail on poll" );
+printf( "exiting Poll\n" ); fflush(stdout);
 
 		for( int i = 0; i < 2; i++ )
 		{
@@ -252,6 +253,7 @@ int main( int argc, char ** argv )
 		
 		if( runtime )
 		{
+printf( "Runtime %ld\n", runtime ); fflush(stdout);
 			runtime -= delta_ms;
 			if( runtime < 0 ) return 0;
 		}
