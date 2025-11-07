@@ -91,6 +91,9 @@ int main( int argc, char ** argv )
 		runtime = atoi( argv[3] ) * 1000ULL;
 		printf( "Timing out after %ld ms\n", runtime );
 	}
+
+	fflush(stdout);
+
 	#define TAP_ADDR "192.168.13.252"
 	sfhip hip = {
 		.ip = HIPIP( 192, 168, 13, 251 ),

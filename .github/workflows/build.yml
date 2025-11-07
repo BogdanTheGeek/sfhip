@@ -4,6 +4,7 @@ on:
   pull_request:
 jobs:
   Build-for-Linux:
+    timeout-minutes: 2
     permissions:
       statuses: write
     runs-on: ubuntu-latest
