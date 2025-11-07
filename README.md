@@ -4,8 +4,10 @@
 ## Setup
 
 ```
-sudo apt-get install bridge-utils build-essential
+sudo apt-get install bridge-utils build-essential gcc-14-riscv64-linux-gnu
 ```
+
+`gcc-14-riscv64-linux-gnu` is only for size testing.
 
 ## License note
 
