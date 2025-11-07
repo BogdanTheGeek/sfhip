@@ -85,8 +85,10 @@ int main( int argc, char ** argv )
 		goto failhelp;
 
 	if( argc > 3 )
+	{
 		runtime = atoi( argv[3] ) * 1000ULL;
-
+		printf( "Timing out after %ld ms\n", runtime );
+	}
 	#define TAP_ADDR "192.168.13.252"
 	sfhip hip = {
 		.ip = HIPIP( 192, 168, 13, 251 ),
