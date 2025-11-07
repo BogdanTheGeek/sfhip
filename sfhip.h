@@ -385,7 +385,7 @@ void sfhip_dhcp_client_request( sfhip * hip )
 	{
 		*(dhcpend++) = 0x32; // Request IP address
 		*(dhcpend++) = 0x04;
- 		*((uint32_t*)dhcpend) = hip->ip;
+ 		*((uint32_t*)dhcpend) = hip->ip; // XXX TODO: Fixme: this will probably explode on ARM
 		dhcpend+=4;
 	}
 
