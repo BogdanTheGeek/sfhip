@@ -253,7 +253,7 @@ int main( int argc, char ** argv )
 		if( runtime )
 		{
 			runtime -= delta_ms;
-			if( runtime < 0 ) return 0;
+			if( runtime <= 0 ) return 0;
 			usleep(1000);
 		}
 
