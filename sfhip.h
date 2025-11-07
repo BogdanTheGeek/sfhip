@@ -172,36 +172,40 @@ typedef struct
 
 typedef struct
 {
+	void * opaque;
+
 	hipmac self_mac;
 	sfhip_address ip;
 	sfhip_address mask;
 	sfhip_address gateway;
-	void * opaque;
+
+	// This will wrap around.
+	uint32_t ms_elapsed;
 
 #if SFHIP_DHCP_CLIENT
 	// if -1, has perma IP
 	// max lease 24.9 days.
 	int32_t dhcp_timer;
 	uint32_t dhcp_transaction_id_last;
-	int need_to_discover : 1;
 	const char * hostname;
 #endif
 
-	// This will wrap around.
-	uint32_t ms_elapsed;
+	// Bitfileds go at end.
+#if SFHIP_DHCP_CLIENT
+	int need_to_discover : 1;
+#endif
 
 }  sfhip;
 
 // You must call.
-int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet * data, int length );
-void sfhip_tick( sfhip * hip, int milliseconds );
+int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet_mtu * data, int length );
+void sfhip_tick( sfhip * hip, sfhip_phy_packet_mtu * scratch, int milliseconds );
 
 // You must implement.
 int sfhip_send_packet( sfhip * hip, sfhip_phy_packet * data, int length );
 
 // Constants
 extern hipmac sfhip_mac_broadcast;
-
 
 // Available functions
 
@@ -322,7 +326,7 @@ int sfhip_send_udp_packet( sfhip * hip, sfhip_phy_packet_mtu * pkt, int payload_
 
 
 #if SFHIP_DHCP_CLIENT
-void sfhip_dhcp_client_request( sfhip * hip )
+void sfhip_dhcp_client_request( sfhip * hip, sfhip_phy_packet_mtu * scratch )
 {
 	// No matter what, we want to give the server time to respond.
 	hip->dhcp_timer = 2048;
@@ -354,7 +358,9 @@ void sfhip_dhcp_client_request( sfhip * hip )
 
 	uint32_t txid = hip->dhcp_transaction_id_last = hip->ms_elapsed;
 
-	sfhip_phy_packet_dhcp_request req_packet = {
+	sfhip_phy_packet_dhcp_request * req_packet = (sfhip_phy_packet_dhcp_request*)scratch;
+
+	*req_packet = (sfhip_phy_packet_dhcp_request){
 		.request = 0x01, // "Request"
 		.hwtype = 0x01,  // "Ethernet"
 		.hwlen = 0x06,  // MAC Address length
@@ -375,8 +381,8 @@ void sfhip_dhcp_client_request( sfhip * hip )
 	};
 
 	// 8 = size of additional_dhcp_payload that is filled out.
-	uint8_t * dhcpend = req_packet.additional_dhcp_payload + 7;
-	uint8_t * dhcpeof = (uint8_t*)(&req_packet+1);
+	uint8_t * dhcpend = req_packet->additional_dhcp_payload + 7;
+	uint8_t * dhcpeof = (uint8_t*)(req_packet+1);
 
 	// Need some free room.
 	if( dhcpeof - dhcpend < 8 ) return;
@@ -405,13 +411,13 @@ void sfhip_dhcp_client_request( sfhip * hip )
 
 	*(dhcpend++) = 0xff; // DHCP end.
 
-	int plen = (int)(dhcpend - (uint8_t*)&req_packet.request);
+	int plen = (int)(dhcpend - (uint8_t*)&req_packet->request);
 
-	sfhip_make_udp_packet( hip, (void*)&req_packet, sfhip_mac_broadcast, 0xffffffff, 68, 67 );
-	sfhip_send_udp_packet( hip, (sfhip_phy_packet_mtu*)&req_packet, plen );
+	sfhip_make_udp_packet( hip, (void*)req_packet, sfhip_mac_broadcast, 0xffffffff, 68, 67 );
+	sfhip_send_udp_packet( hip, (sfhip_phy_packet_mtu*)req_packet, plen );
 }
 
-int sfhip_dhcp_handle( sfhip * hip, uint8_t * data, int length )
+int sfhip_dhcp_handle( sfhip * hip, sfhip_phy_packet_mtu * original_packet, uint8_t * data, int length )
 {
 	typedef struct HIPPACK16
 	{
@@ -475,7 +481,7 @@ int sfhip_dhcp_handle( sfhip * hip, uint8_t * data, int length )
 				hip->need_to_discover = 1;
 
 				// Re-request immediately.
-				sfhip_dhcp_client_request( hip );
+				sfhip_dhcp_client_request( hip, original_packet );
 
 				return 0;
 			}
@@ -507,7 +513,7 @@ int sfhip_dhcp_handle( sfhip * hip, uint8_t * data, int length )
 		//	 HIPIPV( hip->ip ), HIPIPV( hip->mask ), HIPIPV( hip->gateway ) );
 
 		// Properly request.  Immediately.
-		sfhip_dhcp_client_request( hip );
+		sfhip_dhcp_client_request( hip, original_packet );
 	}
 
 	if( dhcp_type == 5 )
@@ -528,7 +534,7 @@ int sfhip_dhcp_handle( sfhip * hip, uint8_t * data, int length )
 
 #endif
 
-int sfhip_handle_udp( sfhip * hip, sfhip_phy_packet * data, int length,
+int sfhip_handle_udp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
 	void * ip_payload, int ip_payload_length )
 {
 	sfhip_udp_header * udp = ip_payload;
@@ -568,7 +574,7 @@ int sfhip_handle_udp( sfhip * hip, sfhip_phy_packet * data, int length,
 #if SFHIP_DHCP_CLIENT
 	if( source_port == 67 && destination_port == 68 )
 	{
-		return sfhip_dhcp_handle( hip, payload, ulen );
+		return sfhip_dhcp_handle( hip, data, payload, ulen );
 	}
 	else
 #endif
@@ -579,7 +585,7 @@ int sfhip_handle_udp( sfhip * hip, sfhip_phy_packet * data, int length,
 	return 0;
 }
 
-int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet * data, int length )
+int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet_mtu * data, int length )
 {
 	// Make sure packet is not a runt frame.  This includes the PHY and etherlink frame.
 	int payload_length = length - sizeof(sfhip_phy_packet);
@@ -646,7 +652,7 @@ int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet * data, int length )
 				icmp->type = 0;
 				icmp->csum = 0;
 				icmp->csum = sfhip_internet_checksum( ip_payload, ip_payload_length );
-				sfhip_ip_reply( hip, data, length );
+				sfhip_ip_reply( hip, (sfhip_phy_packet*)data, length );
 			}
 			break;
 		}
@@ -683,7 +689,7 @@ int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet * data, int length )
 			arp->sproto = hip->ip;
 			arp->operation = HIPHTONS( 0x02 );
 
-			return sfhip_mac_reply( hip, data, length );
+			return sfhip_mac_reply( hip, (sfhip_phy_packet*)data, length );
 		}
 		else
 		{
@@ -699,7 +705,7 @@ int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet * data, int length )
 	return 0;
 }
 
-void sfhip_tick( sfhip * hip, int milliseconds )
+void sfhip_tick( sfhip * hip, sfhip_phy_packet_mtu * scratch, int milliseconds )
 {
 #if SFHIP_DHCP_CLIENT
 	int dhcp_time = hip->dhcp_timer;
@@ -711,7 +717,7 @@ void sfhip_tick( sfhip * hip, int milliseconds )
 			// Request every second.
 			if( next_time <= 0  )
 			{
-				sfhip_dhcp_client_request( hip );
+				sfhip_dhcp_client_request( hip, scratch );
 				next_time = 2048;
 			}
 		}

@@ -1,11 +1,11 @@
 all : linuxtest
 
 linuxtest : linuxtest.c
-	gcc -O1 -g -o $@ $^
+	gcc -Os -g -o $@ $^ -flto
 
 testprom : linuxtest
 	echo "Be sure to give tap1 an ip!"
-	sudo ./linuxtest tap1 -
+	sudo ./linuxtest tap1 enx00249b462a68
 #- enx00e04c681031
 
 testlocal : linuxtest

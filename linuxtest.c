@@ -82,6 +82,9 @@ int main( int argc, char ** argv )
 	int64_t runtime = 0;
 
 	printf( "Main started\n" );
+	printf( "Link Force Symbol: %p\n", &sfhip_accept_packet );
+	printf( "Link Force Symbol: %p\n", &sfhip_tick );
+	printf( "Link Force Symbol: %p\n", &sfhip_send_packet );
 
 	if( argc < 3 )
 		goto failhelp;
@@ -243,14 +246,16 @@ int main( int argc, char ** argv )
 				int r = read( fds[i].fd, buf + offset, 2048 );
 				if( r < 0 )
 					FAIL( "read() failed %s\n", strerror( errno ) );
-				sfhip_accept_packet( &hip, (sfhip_phy_packet *)buf, r + offset );
+				sfhip_accept_packet( &hip, (sfhip_phy_packet_mtu *)buf, r + offset );
 			}
 		}
 
 	    clock_gettime(CLOCK_MONOTONIC_RAW, &monotime);
 		uint64_t ms = (monotime.tv_nsec/1000000ULL) + (monotime.tv_sec*1000ULL);
 		int delta_ms = ms - last_time;
-		sfhip_tick( &hip, delta_ms );
+
+		sfhip_phy_packet_mtu scratch;
+		sfhip_tick( &hip, &scratch, delta_ms );
 		
 		if( runtime )
 		{
