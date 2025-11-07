@@ -224,19 +224,21 @@ int main( int argc, char ** argv )
 	{
 		uint8_t buf[2048+4] HIPALIGN16 = { 0 };
 
-		struct pollfd fds[2] = {
-			{ .fd = fddev, .events = POLLIN },
-			{ .fd = fdtap, .events = POLLIN }
-		};
+		int nr_fds = (!!fddev) + (!!fdtap);
 
-		int r = poll( fds, 2, 10 );
+		struct pollfd fds[2] = { 0 };
+		int i = 0;
+		if( fddev )	{ fds[i].fd = fddev; fds[i].events = POLLIN; i++; }
+		if( fdtap )	{ fds[i].fd = fdtap; fds[i].events = POLLIN; i++; }
+
+		int r = poll( fds, nr_fds, 10 );
 		if( r < 0 ) FAIL( "Fail on poll" );
 
-		for( int i = 0; i < 2; i++ )
+		for( i = 0; i < nr_fds; i++ )
 		{
 			if( fds[i].fd && ( fds[i].revents & POLLIN ) )
 			{
-				int offset = ((i==0)?4:0);
+				int offset = ((fds[i].fd==fddev)?4:0);
 				// If not a taptun device, add 4 bytes to the offset
 				int r = read( fds[i].fd, buf + offset, 2048 );
 				if( r < 0 )
@@ -254,7 +256,6 @@ int main( int argc, char ** argv )
 		{
 			runtime -= delta_ms;
 			if( runtime <= 0 ) return 0;
-			usleep(1000);
 		}
 
 		last_time = ms;

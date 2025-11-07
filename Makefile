@@ -5,10 +5,11 @@ linuxtest : linuxtest.c
 
 testprom : linuxtest
 	echo "Be sure to give tap1 an ip!"
-	sudo ./linuxtest tap1 enx00e04c681031
+	sudo ./linuxtest tap1 -
+#- enx00e04c681031
 
 testlocal : linuxtest
-	./linuxtest tap1 - 4 &
+	./linuxtest tap1 - 5 &
 	ping 192.168.13.251 -c 2
 
 # alternatively you just put your ethernet device after the -

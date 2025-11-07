@@ -88,7 +88,7 @@
 
 // For fixed IPs, this compiles to a constant number.
 #define HIPIP( a, b, c, d ) \
-	HIPHTONL((((d)&0xff)<<24)|(((c)&0xff)<<16)|(((b)&0xff)<<8)|((a)&0xff))
+	HIPHTONL((((d)&0xff)<<0)|(((c)&0xff)<<8)|(((b)&0xff)<<16)|(((a)&0xff)<<24))
 
 typedef struct HIPPACK16
 {
@@ -684,7 +684,6 @@ int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet * data, int length )
 			arp->operation = HIPHTONS( 0x02 );
 
 			return sfhip_mac_reply( hip, data, length );
-
 		}
 		else
 		{
