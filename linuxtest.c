@@ -216,7 +216,7 @@ int main( int argc, char ** argv )
 
 	uint64_t last_time = 0;
     struct timespec monotime;
-    clock_gettime(CLOCK_MONOTONIC, &monotime);
+    clock_gettime(CLOCK_MONOTONIC_RAW, &monotime);
 	uint64_t ms = (monotime.tv_nsec/1000000ULL) + (monotime.tv_sec*1000ULL);
 	last_time = ms;
 
@@ -245,7 +245,7 @@ int main( int argc, char ** argv )
 			}
 		}
 
-	    clock_gettime(CLOCK_MONOTONIC, &monotime);
+	    clock_gettime(CLOCK_MONOTONIC_RAW, &monotime);
 		uint64_t ms = (monotime.tv_nsec/1000000ULL) + (monotime.tv_sec*1000ULL);
 		int delta_ms = ms - last_time;
 		sfhip_tick( &hip, delta_ms );
