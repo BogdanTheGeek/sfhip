@@ -18,6 +18,7 @@
 #include <linux/if_tun.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 
 #include <poll.h>
 
@@ -87,6 +88,7 @@ int main( int argc, char ** argv )
 		.mask = HIPIP( 255, 255, 255, 0 ),
 		.gateway = HIPIP( 192, 168, 13, 1 ),
 		.self_mac = { 0xf0, 0x11, 0x22, 0x33, 0x44, 0x55 },
+		.hostname = "sfhip_test_linux",
 	};
 
 	{
@@ -117,7 +119,7 @@ int main( int argc, char ** argv )
 			struct ifreq ifr_ifup = { 0 };
 			ifr.ifr_flags = 0;
 			((struct sockaddr_in *)&ifr.ifr_addr)->sin_family = AF_INET;
-			((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr = inet_addr(TAP_ADDR);
+			((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr.s_addr = inet_addr(TAP_ADDR);
 			if(( ioctl( sockup, SIOCSIFADDR, (void*)&ifr)) == -1 )
 				FAIL( "SIOCSIFADDR failed %s\n", strerror(errno) );
 
@@ -200,16 +202,22 @@ int main( int argc, char ** argv )
 		}
 	}
 
+	uint64_t last_time = 0;
+    struct timespec monotime;
+    clock_gettime(CLOCK_MONOTONIC, &monotime);
+	uint64_t ms = (monotime.tv_nsec/1000000ULL) + (monotime.tv_sec*1000ULL);
+	last_time = ms;
+
 	do
 	{
-		uint8_t buf[2048+4] HIPALIGN32 = { 0 };
+		uint8_t buf[2048+4] HIPALIGN16 = { 0 };
 
 		struct pollfd fds[2] = {
 			{ .fd = fddev, .events = POLLIN },
 			{ .fd = fdtap, .events = POLLIN }
 		};
 
-		int r = poll( fds, 2, 10000 );
+		int r = poll( fds, 2, 10 );
 		if( r < 0 ) FAIL( "Fail on poll" );
 
 		for( int i = 0; i < 2; i++ )
@@ -224,6 +232,14 @@ int main( int argc, char ** argv )
 				sfhip_accept_packet( &hip, (sfhip_phy_packet *)buf, r + offset );
 			}
 		}
+
+	    clock_gettime(CLOCK_MONOTONIC, &monotime);
+		uint64_t ms = (monotime.tv_nsec/1000000ULL) + (monotime.tv_sec*1000ULL);
+		int delta_ms = ms - last_time;
+		sfhip_tick( &hip, delta_ms );
+
+		last_time = ms;
+
 #if 0
 		printf( "%4d: ", r );
 		for( int i = 0; i < r; i++ )

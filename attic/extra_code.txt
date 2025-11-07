@@ -1,0 +1,22 @@
+// For checking UDP checksum
+
+	if( destination_port == 9999 )
+	{
+		uint8_t * payload = (uint8_t*)(udp+1);
+
+		static uint32_t last = 0;
+		uint32_t ths = payload[0] | (payload[1]<<8) | (payload[2]<<16) | (payload[3]<<24);
+
+static int checksumcheck[65536];
+if( checksumcheck[udp->checksum]++ > 4 )
+	printf( "%04x %08x\n", udp->checksum, ths );
+
+
+		int diff = ths-last;
+		if( diff != 1 )
+		{
+			printf( "Mismatch: %d %08x %04x\n", diff, ths, udp->checksum );
+		}
+		last = ths;
+	}
+
