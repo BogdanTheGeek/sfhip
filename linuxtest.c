@@ -79,8 +79,13 @@ int sfhip_send_packet( sfhip * hip, sfhip_phy_packet * data, int length )
 
 int main( int argc, char ** argv )
 {
+	int64_t runtime = 0;
+
 	if( argc < 3 )
 		goto failhelp;
+
+	if( argc > 3 )
+		runtime = atoi( argv[3] ) * 1000ULL;
 
 	#define TAP_ADDR "192.168.13.252"
 	sfhip hip = {
@@ -237,6 +242,12 @@ int main( int argc, char ** argv )
 		uint64_t ms = (monotime.tv_nsec/1000000ULL) + (monotime.tv_sec*1000ULL);
 		int delta_ms = ms - last_time;
 		sfhip_tick( &hip, delta_ms );
+		
+		if( runtime )
+		{
+			runtime -= delta_ms;
+			if( runtime < 0 ) return 0;
+		}
 
 		last_time = ms;
 
