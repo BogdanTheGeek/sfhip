@@ -81,6 +81,8 @@ int main( int argc, char ** argv )
 {
 	int64_t runtime = 0;
 
+	printf( "Main started\n" );
+
 	if( argc < 3 )
 		goto failhelp;
 
