@@ -77,6 +77,47 @@ int sfhip_send_packet( sfhip * hip, sfhip_phy_packet * data, int length )
 	return 0;
 }
 
+
+void sfhip_got_dhcp_lease( sfhip * hip, sfhip_address addr )
+{
+	printf( "DHCP IP: " HIPIPSTR "\n", HIPIPV( addr ) );
+}
+
+int  sfhip_tcp_accept_connection( sfhip * hip, tcp_socket * socket, uint8_t * ip_payload, int max_ip_payload )
+{
+	printf( "Accept Connection\n" );
+	return 0;
+}
+
+int  sfhip_tcp_got_data( sfhip * hip, tcp_socket * ts, uint8_t * ip_payload, int ip_payload_length, int max_ip_payload )
+{
+	printf( "Got Data (%c)\n", ip_payload[0] );
+	return 0;
+}
+
+int  sfhip_tcp_send_done( sfhip * hip, tcp_socket * ts, uint8_t * ip_payload, int max_ip_payload )
+{
+	printf( "Send Done\n" );
+	return 0;
+}
+
+void sfhip_tcp_socket_closed( sfhip * hip, tcp_socket * ts )
+{
+	printf( "Socket Closed\n" );
+}
+
+int  sfhip_tcp_can_send( sfhip * hip, tcp_socket * ts, uint8_t * ip_payload, int max_ip_payload )
+{
+	static int c;
+	ip_payload[0] = 'X';
+	ip_payload[1] = '\n';
+	c++;
+	if( c & 1 )
+		return 2;
+	else
+		return -1;
+}
+
 int main( int argc, char ** argv )
 {
 	int64_t runtime = 0;

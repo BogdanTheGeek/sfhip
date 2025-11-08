@@ -41,6 +41,19 @@
 #define SFHIP_EMIT_UDP_CHECKSUM 1
 #endif
 
+// Set to 0 for not TCP support
+#ifndef SFHIP_TCP_SOCKETS
+#define SFHIP_TCP_SOCKETS 16
+#endif
+
+#ifndef SFHIP_CHECK_TCP_CHECKSUM
+#define SFHIP_CHECK_TCP_CHECKSUM 1
+#endif
+
+#ifndef SFHIP_EMIT_TCP_CHECKSUM
+#define SFHIP_EMIT_TCP_CHECKSUM 1
+#endif
+
 ///////////////////////////////////////////////////////////////////////////////
 // Internal
 
@@ -72,7 +85,9 @@
 #endif
 
 #define HIPALIGN16          __attribute__((aligned(2)))
+#define HIPALIGN32          __attribute__((aligned(32)))
 #define HIPPACK16           HIPALIGN16 __attribute__((packed))
+#define HIPPACK32           HIPALIGN32 __attribute__((packed))
 #define HIPPACK             __attribute__((packed))
 
 #define HIPMACSTR           "%02x:%02x:%02x:%02x:%02x:%02x"
@@ -82,7 +97,23 @@
 #define HIPIPV( x )         (HIPNTOHL( x )>>24)&0xff, (HIPNTOHL( x )>>16)&0xff, (HIPNTOHL( x )>>8)&0xff, (HIPNTOHL( x )>>0)&0xff
 
 #define HIPMACEQUAL( x, y ) (((uint16_t*)x.mac)[0] == ((uint16_t*)y.mac)[0] && ((uint16_t*)x.mac)[1] == ((uint16_t*)y.mac)[1] && ((uint16_t*)x.mac)[2] == ((uint16_t*)y.mac)[2] )
-#define SFHIP_IPPROTO_UDP 17
+
+#define SFHIP_IPPROTO_UDP   17
+#define SFHIP_IPPROTO_TCP   6
+#define SFHIP_IPPROTO_ICMP  1
+
+#define SFHIP_TCP_SOCKETS_FLAG_FIN   1
+#define SFHIP_TCP_SOCKETS_FLAG_SYN   2
+#define SFHIP_TCP_SOCKETS_FLAG_RESET 4
+#define SFHIP_TCP_SOCKETS_FLAG_PSH   8
+#define SFHIP_TCP_SOCKETS_FLAG_ACK   16
+
+#define SFHIP_TCP_MODE_CLOSED        0
+#define SFHIP_TCP_MODE_SENT_SYN_ACK  1
+#define SFHIP_TCP_MODE_ESTABLISHED   2
+#define SFHIP_TCP_MODE_CLOSING_WAIT  3
+#define SFHIP_TCP_MODE_CLOSING_WAIT2 4
+
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -145,6 +176,18 @@ typedef struct HIPPACK16
 
 typedef struct HIPPACK16
 {
+	hipbe16 source_port;
+	hipbe16 destination_port;
+	hipbe32 seqno;
+	hipbe32 ackno;
+	hipbe16 flags;
+	hipbe16 window;
+	hipbe16 checksum;
+	hipbe16 urgent;
+} sfhip_tcp_header;
+
+typedef struct HIPPACK16
+{
 	hipbe16 hwtype;
 	hipbe16 protocol;
 	uint8_t hwlen;
@@ -165,10 +208,24 @@ typedef struct HIPPACK16
 	hipbe16 sequence;
 } sfhip_icmp_header;
 
+#if SFHIP_TCP_SOCKETS
 typedef struct
 {
-	
-} sfhip_tcp_socket;
+	void * opaque;
+
+	sfhip_address remote_address;
+	hipbe16       local_port;
+	hipbe16       remote_port;
+	uint32_t      seq_num;
+	uint32_t      ack_num;
+	hipmac        remote_mac;
+	uint16_t      retry;
+	uint32_t      pending_send_time; //XXX TODO
+	uint16_t      pending_send_size;
+	uint8_t       mode; // SFHIP_TCP_MODE_*
+	uint8_t       retry_number;
+} tcp_socket;
+#endif
 
 typedef struct
 {
@@ -190,19 +247,41 @@ typedef struct
 	const char * hostname;
 #endif
 
+#if SFHIP_TCP_SOCKETS
+	tcp_socket tcps[SFHIP_TCP_SOCKETS];
+#endif
+
+	// Smaller types
+	uint16_t tick_event_last_sent;
+
 	// Bitfileds go at end.
 #if SFHIP_DHCP_CLIENT
 	int need_to_discover : 1;
+	int tries_before_discover : 3;
 #endif
 
 }  sfhip;
 
 // You must call.
 int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet_mtu * data, int length );
-void sfhip_tick( sfhip * hip, sfhip_phy_packet_mtu * scratch, int milliseconds );
+int sfhip_tick( sfhip * hip, sfhip_phy_packet_mtu * scratch, int milliseconds );
 
 // You must implement.
 int sfhip_send_packet( sfhip * hip, sfhip_phy_packet * data, int length );
+
+#if SFHIP_DHCP_CLIENT
+void sfhip_got_dhcp_lease( sfhip * hip, sfhip_address addr );
+#endif
+
+#if SFHIP_TCP_SOCKETS
+int  sfhip_tcp_accept_connection( sfhip * hip, tcp_socket * socket, uint8_t * ip_payload, int max_ip_payload );
+int  sfhip_tcp_got_data( sfhip * hip, tcp_socket * ts, uint8_t * ip_payload, int ip_payload_length, int max_ip_payload );
+int  sfhip_tcp_send_done( sfhip * hip, tcp_socket * ts, uint8_t * ip_payload, int max_ip_payload );
+void sfhip_tcp_socket_closed( sfhip * hip, tcp_socket * ts );
+
+// Like send_done, but for polling.
+int  sfhip_tcp_can_send( sfhip * hip, tcp_socket * ts, uint8_t * ip_payload, int max_ip_payload );
+#endif
 
 // Constants
 extern hipmac sfhip_mac_broadcast;
@@ -253,7 +332,8 @@ hipbe16 sfhip_internet_checksum( uint16_t * data, int length )
 	return ( ((uint16_t)~sum) );
 }
 
-void sfhip_make_ip_packet( sfhip * hip, sfhip_phy_packet_mtu * pkt, hipmac destination_mac, sfhip_address destination_address )
+void sfhip_make_ip_packet( sfhip * hip, sfhip_phy_packet_mtu * pkt, hipmac destination_mac,
+	sfhip_address destination_address )
 {
 	// A little weird. We don't take on a source or destination port here.
 	// No need to dirty up the ABI register allocation.
@@ -275,7 +355,8 @@ void sfhip_make_ip_packet( sfhip * hip, sfhip_phy_packet_mtu * pkt, hipmac desti
 	ip->destination_address = destination_address;
 }
 
-int sfhip_make_udp_packet( sfhip * hip, sfhip_phy_packet_mtu * pkt, hipmac destination_mac, sfhip_address destination_address, int source_port, int destination_port )
+int sfhip_make_udp_packet( sfhip * hip, sfhip_phy_packet_mtu * pkt, hipmac destination_mac,
+	sfhip_address destination_address, int source_port, int destination_port )
 {
 	sfhip_make_ip_packet( hip, pkt, destination_mac, destination_address );
 
@@ -302,11 +383,13 @@ int sfhip_send_udp_packet( sfhip * hip, sfhip_phy_packet_mtu * pkt, int payload_
 	// Build and compute checksum on UDP pseudo-header in-place.
 	uint16_t * csumstart = ((void*)udp) - 12;
 	csumstart[0] = SFHIP_IPPROTO_UDP<<8;
-	csumstart[1] = udp->length;
+	csumstart[1] = udp->length; // XXX Why no flip endian? SUSSY
 
 #if SFHIP_EMIT_UDP_CHECKSUM
-	uint16_t udpcsum = sfhip_internet_checksum( (uint16_t*)csumstart, payload_length + sizeof( sfhip_udp_header) + 12  );
-	if( udpcsum == 0x0000 ) udpcsum = 0xffff; // Per RFC 768, on send, if checksum is 0x0000, set it to 0xffff.
+	uint16_t udpcsum = sfhip_internet_checksum( (uint16_t*)csumstart, payload_length +
+		sizeof( sfhip_udp_header) + 12  );
+	// Per RFC 768, on send, if checksum is 0x0000, set it to 0xffff.
+	if( udpcsum == 0x0000 ) udpcsum = 0xffff;
 	udp->checksum = udpcsum;
 #endif
 
@@ -320,13 +403,14 @@ int sfhip_send_udp_packet( sfhip * hip, sfhip_phy_packet_mtu * pkt, int payload_
 	uint16_t hs = sfhip_internet_checksum( (uint16_t*)ip, sizeof( sfhip_ip_header ) );
 	ip->header_checksum = hs;
 
-	int packlen = payload_length + HIP_PHY_HEADER_LENGTH_BYTES + sizeof(sfhip_mac_header) + sizeof( sfhip_ip_header ) + sizeof( sfhip_udp_header );
+	int packlen = payload_length + HIP_PHY_HEADER_LENGTH_BYTES + sizeof(sfhip_mac_header) +
+		sizeof( sfhip_ip_header ) + sizeof( sfhip_udp_header );
 	return sfhip_send_packet( hip, (sfhip_phy_packet*)pkt, packlen );
 }
 
-
 #if SFHIP_DHCP_CLIENT
-void sfhip_dhcp_client_request( sfhip * hip, sfhip_phy_packet_mtu * scratch )
+
+int sfhip_dhcp_client_request( sfhip * hip, sfhip_phy_packet_mtu * scratch )
 {
 	// No matter what, we want to give the server time to respond.
 	hip->dhcp_timer = 2048;
@@ -360,6 +444,11 @@ void sfhip_dhcp_client_request( sfhip * hip, sfhip_phy_packet_mtu * scratch )
 
 	sfhip_phy_packet_dhcp_request * req_packet = (sfhip_phy_packet_dhcp_request*)scratch;
 
+	if( !hip->need_to_discover && (hip->tries_before_discover++) > 3 )
+	{
+		hip->need_to_discover = 1;
+	}
+
 	*req_packet = (sfhip_phy_packet_dhcp_request){
 		.request = 0x01, // "Request"
 		.hwtype = 0x01,  // "Ethernet"
@@ -385,7 +474,7 @@ void sfhip_dhcp_client_request( sfhip * hip, sfhip_phy_packet_mtu * scratch )
 	uint8_t * dhcpeof = (uint8_t*)(req_packet+1);
 
 	// Need some free room.
-	if( dhcpeof - dhcpend < 8 ) return;
+	if( dhcpeof - dhcpend < 8 ) return 0;
 
 	if( !hip->need_to_discover && hip->ip )
 	{
@@ -404,7 +493,7 @@ void sfhip_dhcp_client_request( sfhip * hip, sfhip_phy_packet_mtu * scratch )
 		while( (c = *(s++)) != 0 )
 		{
 			*(dhcpend++) = c;
-			if( dhcpeof - dhcpend < 3 ) return; // Make sure we don't overflow.
+			if( dhcpeof - dhcpend < 3 ) return 0; // Make sure we don't overflow.
 		}
 		*sstart = dhcpend - sstart - 1;
 	}
@@ -415,6 +504,8 @@ void sfhip_dhcp_client_request( sfhip * hip, sfhip_phy_packet_mtu * scratch )
 
 	sfhip_make_udp_packet( hip, (void*)req_packet, sfhip_mac_broadcast, 0xffffffff, 68, 67 );
 	sfhip_send_udp_packet( hip, (sfhip_phy_packet_mtu*)req_packet, plen );
+
+	return 1;
 }
 
 int sfhip_dhcp_handle( sfhip * hip, sfhip_phy_packet_mtu * original_packet, uint8_t * data, int length )
@@ -483,7 +574,7 @@ int sfhip_dhcp_handle( sfhip * hip, sfhip_phy_packet_mtu * original_packet, uint
 				// Re-request immediately.
 				sfhip_dhcp_client_request( hip, original_packet );
 
-				return 0;
+				return 1;
 			}
 			// Offer = 2, Ack == 5
 			break;
@@ -502,18 +593,23 @@ int sfhip_dhcp_handle( sfhip * hip, sfhip_phy_packet_mtu * original_packet, uint
 		dhcp += dhcp_length;
 	} while( dhcp + 2 < dhcpend );
 
+	int sent = 0;
+
 	if( dhcp_type == 2 && dhcp_offer_router && dhcp_offer_mask && d->your_client_address )
 	{
 		hip->need_to_discover = 0;
+		hip->tries_before_discover = 0;
 		hip->ip = d->your_client_address;
 		hip->mask = dhcp_offer_mask;
 		hip->gateway = dhcp_offer_router;
+
+		sfhip_got_dhcp_lease( hip, hip->ip );
 
 		//printf( "IP   " HIPIPSTR "\nMASK " HIPIPSTR "\nGATE " HIPIPSTR "\n",
 		//	 HIPIPV( hip->ip ), HIPIPV( hip->mask ), HIPIPV( hip->gateway ) );
 
 		// Properly request.  Immediately.
-		sfhip_dhcp_client_request( hip, original_packet );
+		sent = sfhip_dhcp_client_request( hip, original_packet );
 	}
 
 	if( dhcp_type == 5 )
@@ -530,6 +626,8 @@ int sfhip_dhcp_handle( sfhip * hip, sfhip_phy_packet_mtu * original_packet, uint
 			
 		hip->dhcp_timer = dhcp_ack_lease_time * 1000;
 	}
+
+	return sent;
 }
 
 #endif
@@ -554,16 +652,8 @@ int sfhip_handle_udp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
 #if SFHIP_CHECK_UDP_CHECKSUM
 	if( udp->checksum )
 	{
-		// Build pseudo-header for checksum.
-		uint16_t * csumstart = ip_payload - 12; // The UDP pseudo header checksum starts 5 bytes back.
-		csumstart[0] = SFHIP_IPPROTO_UDP<<8;
-		csumstart[1] = udp->length;
-		uint16_t ccsum = sfhip_internet_checksum( csumstart, ulen + 20 );
-
-		if( ccsum )
-		{
+		if( sfhip_internet_checksum( ip_payload-12, ulen + 20 ) )
 			return -1;
-		}
 	}
 #endif
 
@@ -576,14 +666,316 @@ int sfhip_handle_udp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
 	{
 		return sfhip_dhcp_handle( hip, data, payload, ulen );
 	}
-	else
 #endif
-	{
-		// Do something else? Should we reply?
-	}
+
+	//if( iph->destination_address == hip->ip || iph->destination_address == 0xffffffff )
+	// TODO: Should we filter the IPs?
+	// We can't be too aggressive, because DHCP offers are unicast.
+
+	// Do something else? Should we reply?
 
 	return 0;
 }
+
+
+
+
+
+#if SFHIP_TCP_SOCKETS
+
+int sfhip_make_tcp_packet( sfhip * hip, sfhip_phy_packet_mtu * pkt, tcp_socket * sock )
+{
+	sfhip_make_ip_packet( hip, pkt, sock->remote_mac, sock->remote_address );
+
+	sfhip_mac_header * mac = &pkt->mac_header;
+	sfhip_ip_header * ip = (sfhip_ip_header *)(mac+1);
+	sfhip_tcp_header * tcp = (sfhip_tcp_header *)(ip+1);
+
+	ip->destination_address = sock->remote_address;
+
+	return SFHIP_MTU - sizeof(sfhip_mac_header) - sizeof( sfhip_ip_header ) - sizeof( sfhip_tcp_header );
+}
+
+int sfhip_send_tcp_packet( sfhip * hip, sfhip_phy_packet_mtu * pkt, int payload_length, tcp_socket * sock, int flag )
+{
+	sfhip_ip_header * ip = (sfhip_ip_header *)( (&pkt->mac_header) +1);
+	sfhip_tcp_header * tcp = (sfhip_tcp_header *)(ip+1);
+
+	tcp->flags = HIPHTONS( ((uint8_t)flag) | ((sizeof(sfhip_tcp_header)>>2)<<12) );
+
+	tcp->source_port = sock->local_port;
+	tcp->destination_port = sock->remote_port;
+	tcp->seqno = HIPHTONL( sock->seq_num ); printf( "USING: %u\n", sock->seq_num );
+	tcp->ackno = HIPHTONL( sock->ack_num );
+	tcp->window = HIPHTONS(1);//HIPHTONS( SFHIP_MTU - sizeof(sfhip_tcp_header) - sizeof(sfhip_ip_header) - sizeof(sfhip_phy_packet) );
+	tcp->checksum = 0;
+	tcp->urgent = 0;
+
+	ip->length = HIPHTONS( sizeof( sfhip_ip_header ) + sizeof( sfhip_tcp_header ) + payload_length );
+
+	// Build and compute checksum on TCP pseudo-header in-place.
+	uint16_t * csumstart = ((void*)tcp) - 12;
+	csumstart[0] = SFHIP_IPPROTO_TCP<<8;
+	csumstart[1] = HIPHTONS( sizeof( sfhip_tcp_header ) + payload_length );
+
+#if SFHIP_EMIT_TCP_CHECKSUM
+	uint16_t csum = sfhip_internet_checksum( (uint16_t*)csumstart, payload_length + sizeof( sfhip_tcp_header) + 12 );
+	// No 0x0000 option for payload (maybe) TODO checkme.
+	//if( udpcsum == 0x0000 ) udpcsum = 0xffff;
+	tcp->checksum = csum;
+#endif
+
+	// Fixup overwritten pseudo header. Note these fields are never
+	// initialized, so we have to initialize them here!!
+	ip->ttl = 64;
+	ip->protocol = SFHIP_IPPROTO_TCP;
+	ip->header_checksum = 0;
+
+	uint16_t hs = sfhip_internet_checksum( (uint16_t*)ip, sizeof( sfhip_ip_header ) );
+	ip->header_checksum = hs;
+
+	int packlen = payload_length + HIP_PHY_HEADER_LENGTH_BYTES + sizeof(sfhip_mac_header) + sizeof( sfhip_ip_header ) + sizeof( sfhip_tcp_header );
+	return sfhip_send_packet( hip, (sfhip_phy_packet*)pkt, packlen );
+}
+
+int sfhip_handle_tcp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
+	void * ip_payload, int ip_payload_length )
+{
+	sfhip_tcp_header * tcp = ip_payload;
+
+	if( ip_payload_length - sizeof( sfhip_tcp_header ) < 0 ) return -1;
+
+	uint16_t flags = HIPNTOHS( tcp->flags );
+
+	int hlen = (flags>>12)<<2;
+
+	// TCP packet size does not match, or runt packet.
+	if( ip_payload_length < 0 ) return -1;
+
+#if SFHIP_CHECK_TCP_CHECKSUM || SFHIP_CHECK_UDP_CHECKSUM
+	sfhip_address sender = ((sfhip_address*)ip_payload)[-2];
+#else
+	sfhip_address sender = ((sfhip_ip_header*)(data->payload))->source_address;
+#endif
+
+
+#if SFHIP_CHECK_TCP_CHECKSUM
+	// Build pseudo-header for checksum.
+	uint16_t ccsum = sfhip_internet_checksum( ip_payload - 12, ip_payload_length + 12 );
+
+	if( ccsum )
+		return -1;
+#endif
+
+	ip_payload_length -= hlen;
+	ip_payload += hlen;
+
+	tcp_socket * ts = hip->tcps;
+
+	int replyflag = 0;
+	int payload_output = 0;
+
+	tcp_socket * tsend = ts + SFHIP_TCP_SOCKETS;
+	do
+	{
+		if( ts->remote_address == sender &&
+			ts->remote_port == tcp->source_port &&
+			ts->local_port == tcp->destination_port )
+		{
+			break;
+		}
+		ts++;
+	} while( ts != tsend );
+
+	// In case we need to abort.  Do not initialize.
+	// If we do need to abort, it will be initialized later.
+	tcp_socket sabort;
+
+	if( ( flags & SFHIP_TCP_SOCKETS_FLAG_SYN ) || ts == tsend )
+	{
+		int i;
+
+		// This is funky because we might be in a situation where
+		// the syn packet from the remote side was lost.  If so
+		// we have to just accept the new packet.  And even more
+		// tricky, what if something weied happened like ack/seq
+		// changing, like if the connection went away and came
+		// back.
+		if( ts == tsend )
+		{
+			// Tricky: This code path also happens for non-syn
+			// packets that don't match the filter.  So if they
+			// are non-syn packets, then, we should immediately
+			// drop the connection.
+			if( flags & SFHIP_TCP_SOCKETS_FLAG_SYN )
+			{
+				ts = hip->tcps;
+				do
+				{
+					if( !ts->remote_address ) break;
+
+					ts++;
+
+					// No free sockets.
+					if( ts == tsend )
+					{
+						ts = &sabort;
+						break;
+					}
+				} while( 1 );
+			}
+			else
+			{
+				ts = &sabort;
+			}
+
+			*ts = (tcp_socket){
+				.remote_address = sender,
+				.local_port = tcp->destination_port,
+				.remote_port = tcp->source_port,
+				.seq_num = HIPNTOHL( hip->ms_elapsed ),
+				.ack_num = HIPNTOHL( tcp->seqno ),
+				.remote_mac = data->mac_header.source,
+			};
+			printf( "INITIAL ASSIGN of seq_num = %d\n", ts->seq_num );
+
+		}
+		else
+		{
+			ts->ack_num = HIPNTOHL( tcp->seqno );
+			ts->remote_mac = data->mac_header.source;
+		}
+
+		ts->ack_num++;
+
+		// No socket allocated, need to abort.
+		if( ts == &sabort )
+		{
+			replyflag = SFHIP_TCP_SOCKETS_FLAG_RESET | SFHIP_TCP_SOCKETS_FLAG_ACK;
+			goto send_reply_addheader;
+		}
+
+		replyflag = SFHIP_TCP_SOCKETS_FLAG_SYN | SFHIP_TCP_SOCKETS_FLAG_ACK;
+		ts->mode = SFHIP_TCP_MODE_SENT_SYN_ACK;
+
+		goto send_reply_addheader;
+	}
+
+	// Here, we now have ts, our socket. Figure out what to do.
+	// Any other wacky situations have been handled above.
+
+	sfhip_make_tcp_packet( hip, data, ts );
+
+	int max_tcp_payload = SFHIP_MTU - sizeof( sfhip_mac_header ) -
+		sizeof( sfhip_ip_header ) - sizeof( sfhip_tcp_header );
+
+	if( flags & SFHIP_TCP_SOCKETS_FLAG_ACK )
+	{
+		uint32_t ackno = HIPNTOHL( tcp->ackno );
+		int ackdiff = ackno - ts->seq_num;
+
+		if( ts->mode == SFHIP_TCP_MODE_SENT_SYN_ACK )
+		{
+			printf( "%u %u %u DIFF on ACK %u\n", ackno, ts->ack_num, ts->seq_num, ackdiff );
+			if( ackdiff == 1 )
+			{
+				ts->mode = SFHIP_TCP_MODE_ESTABLISHED;
+				ts->seq_num = ackno; printf( "Assigning seq_num=%u\n", ackno );
+				payload_output = sfhip_tcp_accept_connection( hip, ts,
+					ip_payload, max_tcp_payload );
+
+				// If the user opts to send data, here, there's no way
+				// to also send data on the ack.
+				if( payload_output )
+					max_tcp_payload = 0;
+			}
+		}
+		else if( ts->mode == SFHIP_TCP_MODE_ESTABLISHED )
+		{
+			if( ts->pending_send_size )
+			{
+				printf( "Pending Diff: Check me: %d %d (will need to fixup if clause)\n", ackdiff, ts->pending_send_size );
+				payload_output = sfhip_tcp_send_done( hip, ts,
+					ip_payload, max_tcp_payload );
+				if( payload_output )
+					max_tcp_payload = 0;
+				ts->pending_send_size = 0;
+			}
+			printf( "Established ack %d %d\n", ackdiff, ts->pending_send_size );
+		}
+		else if( ts->mode == SFHIP_TCP_MODE_CLOSING_WAIT )
+		{
+			// I think this is for clients?
+			printf( "Closing mode wait %d\n", ackdiff );
+			if( ackdiff == 1 )
+			{
+				ts->mode == SFHIP_TCP_MODE_CLOSING_WAIT2;
+			}
+		}
+
+		printf( "ackdiff: %d (%d)\n", ackdiff, ts->mode );
+		// Acking data?
+	}
+
+	uint32_t seqno = HIPNTOHL( tcp->seqno );
+
+	if( flags & SFHIP_TCP_SOCKETS_FLAG_PSH )
+	{
+		if( ts->mode != SFHIP_TCP_MODE_ESTABLISHED )
+		{
+			replyflag = SFHIP_TCP_SOCKETS_FLAG_RESET | SFHIP_TCP_SOCKETS_FLAG_ACK;
+			goto send_reply;
+		}
+
+		int seqdiff = seqno - ts->ack_num;
+		printf( "PUSH: %d %d\n", seqdiff, ip_payload_length );
+
+		// If the packet from them to us was dropped, we still need
+		// to ack it.
+		replyflag = SFHIP_TCP_SOCKETS_FLAG_ACK;
+
+		if( seqdiff == 0 )
+		{
+			// We can accept it.
+			ts->ack_num += ip_payload_length;
+			printf( "ACCEPTING SEQNO: %d seqdiff = 0\n", ts->ack_num );
+
+			payload_output = sfhip_tcp_got_data( hip, ts,
+				ip_payload, ip_payload_length, max_tcp_payload );
+		}
+
+		goto send_reply;
+	}
+
+	if( flags & SFHIP_TCP_SOCKETS_FLAG_FIN )
+	{
+		replyflag = SFHIP_TCP_SOCKETS_FLAG_ACK;
+		ts->ack_num = seqno + 1;
+		ts->mode = SFHIP_TCP_MODE_CLOSING_WAIT;
+
+		payload_output = 0;
+		replyflag = SFHIP_TCP_SOCKETS_FLAG_ACK;
+
+		// Remote side closed our connection.
+		sfhip_tcp_socket_closed( hip, ts );
+		goto send_reply;
+	}
+
+	return 0;
+send_reply_addheader:
+	sfhip_make_tcp_packet( hip, data, ts );
+
+send_reply:
+	if( payload_output )
+	{
+		replyflag |= SFHIP_TCP_SOCKETS_FLAG_PSH;
+		printf("************** %d\n", payload_output );
+		ts->pending_send_size = payload_output;
+	}
+	return sfhip_send_tcp_packet( hip, data, payload_output, ts, replyflag );
+}
+#endif
+
 
 int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet_mtu * data, int length )
 {
@@ -637,9 +1029,7 @@ int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet_mtu * data, int length )
 
 		int protocol = iph->protocol;
 
-		switch( protocol )
-		{
-		case 1: // IPPROTO_ICMP
+		if( protocol == SFHIP_IPPROTO_ICMP )
 		{
 			if( ip_payload_length < sizeof( sfhip_icmp_header ) )
 				return -1;
@@ -654,15 +1044,35 @@ int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet_mtu * data, int length )
 				icmp->csum = sfhip_internet_checksum( ip_payload, ip_payload_length );
 				sfhip_ip_reply( hip, (sfhip_phy_packet*)data, length );
 			}
-			break;
+			return 0;
 		}
+
+#if SFHIP_CHECK_UDP_CHECKSUM || SFHIP_CHECK_TCP_CHECKSUM
+		// Setup the psudoheader.  We can use a common setup for UDP and TCP.
+		sfhip_address * pseudoheader = ip_payload - 12;
+		if( hlen < 20 )
+		{
+			pseudoheader[1] = iph->source_address;
+			pseudoheader[2] = iph->destination_address;
+		}
+		pseudoheader[0] = (iph->protocol<<24) | HIPNTOHS(ip_payload_length);
+#endif
+
+		switch( protocol )
+		{
 		case SFHIP_IPPROTO_UDP:
 		{
 			return sfhip_handle_udp( hip, data, length, ip_payload, ip_payload_length );
 		}
-		default:
-			break;
+		case SFHIP_IPPROTO_TCP:
+		{
+			if( iph->destination_address == hip->ip )
+				return sfhip_handle_tcp( hip, data, length, ip_payload, ip_payload_length );
 		}
+		default:
+		}
+
+		return 0;
 	}
 	else if( ethertype_be == HIPHTONS( 0x0806 ) )
 	{
@@ -705,26 +1115,92 @@ int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet_mtu * data, int length )
 	return 0;
 }
 
-void sfhip_tick( sfhip * hip, sfhip_phy_packet_mtu * scratch, int milliseconds )
+int sfhip_tick( sfhip * hip, sfhip_phy_packet_mtu * scratch, int dt_ms )
 {
+	int sent = 0;
+	int cursor = 0;
+
+	int tsl = hip->tick_event_last_sent;
+
 #if SFHIP_DHCP_CLIENT
-	int dhcp_time = hip->dhcp_timer;
-	if( dhcp_time != -1 )
+	if( tsl < ++cursor )
 	{
-		int next_time = dhcp_time - milliseconds;
-		if( dhcp_time <= milliseconds )
+		int dhcp_time = hip->dhcp_timer;
+		if( dhcp_time != -1 )
 		{
-			// Request every second.
-			if( next_time <= 0  )
+			int next_time = dhcp_time - dt_ms;
+			if( dhcp_time <= dt_ms )
 			{
-				sfhip_dhcp_client_request( hip, scratch );
-				next_time = 2048;
+				// Request every second.
+				if( next_time <= 0  )
+				{
+					sent = sfhip_dhcp_client_request( hip, scratch );
+					next_time = 2048;
+				}
 			}
+			hip->dhcp_timer = next_time;
 		}
-		hip->dhcp_timer = next_time;
 	}
 #endif
-	hip->ms_elapsed += milliseconds;
+
+	if( sent ) goto done;
+
+#if SFHIP_TCP_SOCKETS
+	tcp_socket * ss = hip->tcps;
+	tcp_socket * ssend = ss + SFHIP_TCP_SOCKETS;
+
+	int max_tcp_payload = SFHIP_MTU - sizeof( sfhip_mac_header ) -
+		sizeof( sfhip_ip_header ) - sizeof( sfhip_tcp_header );
+
+	do
+	{
+		if( tsl < ++cursor )
+		{
+			if( ss->remote_address )
+			{
+				if( ss->mode == SFHIP_TCP_MODE_ESTABLISHED )
+				{
+
+					// Slow standoff, or waiting for someone to send data.
+					if( !ss->pending_send_size || ss->pending_send_time > (ss->retry_number+1)<<7 )
+					{
+						sfhip_make_tcp_packet( hip, scratch, ss );
+
+						uint8_t * tcp_payload_buffer = (uint8_t*)((sfhip_tcp_header*)(((sfhip_ip_header*)scratch->payload)+1)+1);
+
+						sent = sfhip_tcp_can_send( hip, ss, tcp_payload_buffer, max_tcp_payload );
+
+						if( sent )
+						{
+							sfhip_send_tcp_packet( hip, scratch, (sent<0)?0:sent, ss, SFHIP_TCP_SOCKETS_FLAG_PSH );
+
+							ss->pending_send_size = sent;
+							goto done;
+						}
+						ss->pending_send_time = 0;
+					}
+					if( ss->pending_send_size )
+						ss->pending_send_time+= dt_ms;
+				}
+				else
+				{
+					// TODO: Handle other modes, for timeout.
+				}
+			}
+		}
+		ss++;
+	}while( ss != ssend );
+#endif
+
+done:
+	hip->ms_elapsed += dt_ms;
+
+	if( !sent )
+		cursor = 0;
+
+	hip->tick_event_last_sent = cursor;
+
+	return sent;
 }
 
 // Configuration asserts
