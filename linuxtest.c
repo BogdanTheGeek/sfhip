@@ -77,45 +77,152 @@ int sfhip_send_packet( sfhip * hip, sfhip_phy_packet * data, int length )
 	return 0;
 }
 
+typedef enum
+{
+	HTP_START,
+	HTP_URL,
+	HTP_POSTURL,
+	HTP_BACKNEXP,
+	HTP_LINEFIRST,
+	HTP_LINE,
+	HTP_BACKNEXPEND,
+	HTP_REQUEST_COMPLETE,
+
+	HTP_HEADER_REPLY_SENT,
+
+	HTP_ERROR,
+} httpparsestate;
+
+typedef struct
+{
+	httpparsestate state : 8;
+} http;
+
+http https[SFHIP_TCP_SOCKETS];
 
 void sfhip_got_dhcp_lease( sfhip * hip, sfhip_address addr )
 {
 	printf( "DHCP IP: " HIPIPSTR "\n", HIPIPV( addr ) );
 }
 
-int  sfhip_tcp_accept_connection( sfhip * hip, tcp_socket * socket, uint8_t * ip_payload, int max_ip_payload )
+int  sfhip_tcp_accept_connection( sfhip * hip, int sockno, int localport, hipbe32 remote_host )
 {
-	printf( "Accept Connection\n" );
-	return 0;
+	// return 0 to accept, -1 to abort.
+	if( localport == 80 )
+	{
+		printf( "Got HTTP %d\n", sockno );
+		http * h = https + sockno;
+		h->state = HTP_START; 
+		return 0;
+	}
+	else
+	{
+		printf( "Invalid port (%d)\n", localport );
+		return -1;
+	}
 }
 
-int  sfhip_tcp_got_data( sfhip * hip, tcp_socket * ts, uint8_t * ip_payload, int ip_payload_length, int max_ip_payload )
+int  sfhip_tcp_got_data( sfhip * hip, int sockno, uint8_t * ip_payload, int ip_payload_length, int max_ip_payload )
 {
+	http * h = https + sockno;
+
 	printf( "Got Data (%c)\n", ip_payload[0] );
+	uint8_t c;
+	uint8_t * p = ip_payload;
+	uint8_t * end = p + ip_payload_length;
+	httpparsestate s = h->state;
+	while( p != end )
+	{
+		// TODO: Would be fun to make this a tiny table.
+		c = *(p++);
+		switch( s )
+		{
+		case HTP_START:
+			if( c == ' ' ) s = HTP_URL;
+			break;
+		case HTP_URL:
+			if( c == ' ' ) s = HTP_POSTURL;
+			else if( c == '\r' ) s = HTP_BACKNEXP;
+			else printf( "%c", c );
+			break;
+		case HTP_BACKNEXP:
+			if( c == '\n' ) s = HTP_LINEFIRST;
+			else s = HTP_ERROR;
+			break;
+		case HTP_LINEFIRST:
+			if( c == '\r' ) s = HTP_BACKNEXPEND;
+			else s = HTP_LINE;
+			break;
+		case HTP_POSTURL:
+			if( c == '\r' ) s = HTP_BACKNEXP;
+			break;
+		case HTP_LINE:
+			if( c == '\r' ) s = HTP_BACKNEXP;
+			break;
+		case HTP_BACKNEXPEND:
+			if( c == '\n' ) s = HTP_REQUEST_COMPLETE;
+			else s = HTP_ERROR;
+			break;
+		default:
+			break;
+		}
+	}
+
+	if( s == HTP_REQUEST_COMPLETE )
+	{
+		printf( "\nComplete\n" );
+	}
+	printf( "State: %d\n", s );
+	h->state = s;
 	return 0;
 }
 
-int  sfhip_tcp_send_done( sfhip * hip, tcp_socket * ts, uint8_t * ip_payload, int max_ip_payload )
+int  sfhip_tcp_send_done( sfhip * hip, int sockno, uint8_t * ip_payload, int max_ip_payload )
 {
+	http * h = https + sockno;
+
 	printf( "Send Done\n" );
+	if( h->state == HTP_REQUEST_COMPLETE )
+		h->state = HTP_HEADER_REPLY_SENT;
 	return 0;
 }
 
-void sfhip_tcp_socket_closed( sfhip * hip, tcp_socket * ts )
+void sfhip_tcp_socket_closed( sfhip * hip, int sockno )
 {
 	printf( "Socket Closed\n" );
 }
 
-int  sfhip_tcp_can_send( sfhip * hip, tcp_socket * ts, uint8_t * ip_payload, int max_ip_payload )
+int  sfhip_tcp_can_send( sfhip * hip, int sockno, uint8_t * ip_payload, int max_ip_payload, int retry )
 {
+
+	http * h = https + sockno;
+
+	if( h->state == HTP_REQUEST_COMPLETE )
+	{
+		sprintf( ip_payload, "HTTP/1.0 200 OK\r\nContent-type: text/html\r\n\r\n" );
+		return 1460;
+	}
+	else if( h->state == HTP_HEADER_REPLY_SENT )
+	{
+		return 1460;
+	}
+	else
+	{
+		return 0;
+	}
+/*
 	static int c;
 	ip_payload[0] = 'X';
 	ip_payload[1] = '\n';
+*/
+
+/*
 	c++;
 	if( c & 1 )
 		return 2;
 	else
 		return -1;
+*/
 }
 
 int main( int argc, char ** argv )
