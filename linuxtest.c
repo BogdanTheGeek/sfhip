@@ -138,11 +138,11 @@ int main( int argc, char ** argv )
 
 	fflush(stdout);
 
-	#define TAP_ADDR "192.168.13.252"
+	#define TAP_ADDR "192.168.14.252"
 	sfhip hip = {
-		.ip = HIPIP( 192, 168, 13, 251 ),
-		.mask = HIPIP( 255, 255, 255, 0 ),
-		.gateway = HIPIP( 192, 168, 13, 1 ),
+		.ip =      HIPIP( 192, 168,  14, 251 ),
+		.mask =    HIPIP( 255, 255, 255, 0   ),
+		.gateway = HIPIP( 192, 168,  14, 1   ),
 		.self_mac = { 0xf0, 0x11, 0x22, 0x33, 0x44, 0x55 },
 		.hostname = "sfhip_test_linux",
 	};

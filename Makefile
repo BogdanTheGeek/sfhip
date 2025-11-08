@@ -23,7 +23,7 @@ testprom : linuxtest
 testeth : linuxtest
 	sudo ./linuxtest - $(ETHERNET_DEV)
 
-testnet : linuxtest
+setupforprommerge : linuxtest
 	sudo ip tuntap add dev "tap1" mode "tap" user $(shell whoami) || true
 	sudo ip link add name br0 type bridge || true
 	sudo ip link set dev br0 up || true
@@ -31,11 +31,10 @@ testnet : linuxtest
 	sudo ip link set tap1 master br0 || true
 	sudo ip addr del $(ETHERNET_ADDR) dev $(ETHERNET_DEV) || true
 	sudo ip addr change $(ETHERNET_ADDR) dev br0
-	sudo ./linuxtest tap1 -
 
 testlocal : linuxtest
 	./linuxtest tap1 - 5 &
-	ping 192.168.13.251 -c 2
+	ping 192.168.14.251 -c 2
 
 # alternatively you just put your ethernet device after the -
 # if you want to allow it out on your network.
