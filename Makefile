@@ -1,5 +1,7 @@
 all : linuxtest
 
+CFLAGS:=-Os -flto
+
 SIZE_PREFIX:=riscv64-linux-gnu
 
 ETHERNET_DEV:=$(shell ip addr | grep ": e" | grep mtu | cut -f 2 -d' ' | cut -f 1 -d':')
@@ -11,7 +13,7 @@ size : linuxtest.c
 	$(SIZE_PREFIX)-objdump -S linuxtest.rv > rv.lst
 
 linuxtest : linuxtest.c
-	gcc -Os -g -o $@ $^ -flto
+	gcc $(CFLAGS) -g -o $@ $^
 	objdump -t $@ | grep hip | grep -v sfhip_send_packet | tr -s ' ' | cut -f 4 -d' ' | cut -f 2 | sed -e 's/^0*//' | tr '[:lower:]' '[:upper:]' | sed -e 's/^/+/' | xargs echo "obase=10;ibase=16;0"  | bc | xargs echo "Total Size Bytes For hip Functions:"
 
 test :

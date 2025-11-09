@@ -1,10 +1,4 @@
 #include <stdio.h>
-
-#define HIP_PHY_HEADER_LENGTH_BYTES 4
-
-#define SFHIP_IMPLEMENTATION
-#include "sfhip.h"
-
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +16,9 @@
 
 #include <poll.h>
 
+
+#include "example.c"
+
 #define FAIL(x...) \
 	{ fprintf( stderr, x ); exit( -5 ); }
 
@@ -30,7 +27,7 @@ int fdtap, fddev;
 uint8_t mymac_dev[6];
 uint8_t mymac_tap[6];
 
-int sfhip_send_packet( sfhip * hip, sfhip_phy_packet * data, int length )
+int linux_send_packet( uint8_t * data, int length )
 {
 	if( length < 18 ) return -1;
 	uint8_t * dpl = (uint8_t*)data;
@@ -77,185 +74,14 @@ int sfhip_send_packet( sfhip * hip, sfhip_phy_packet * data, int length )
 	return 0;
 }
 
-typedef enum
+
+int linuxtest( const char * devname_tap, const char * devname_eth )
 {
-	HTP_START,
-	HTP_URL,
-	HTP_POSTURL,
-	HTP_BACKNEXP,
-	HTP_LINEFIRST,
-	HTP_LINE,
-	HTP_BACKNEXPEND,
-	HTP_REQUEST_COMPLETE,
-
-	HTP_HEADER_REPLY_SENT,
-
-	HTP_ERROR,
-} httpparsestate;
-
-typedef struct
-{
-	httpparsestate state : 8;
-} http;
-
-http https[SFHIP_TCP_SOCKETS];
-
-void sfhip_got_dhcp_lease( sfhip * hip, sfhip_address addr )
-{
-	printf( "DHCP IP: " HIPIPSTR "\n", HIPIPV( addr ) );
-}
-
-int  sfhip_tcp_accept_connection( sfhip * hip, int sockno, int localport, hipbe32 remote_host )
-{
-	// return 0 to accept, -1 to abort.
-	if( localport == 80 )
-	{
-		printf( "Got HTTP %d\n", sockno );
-		http * h = https + sockno;
-		h->state = HTP_START; 
-		return 0;
-	}
-	else
-	{
-		printf( "Invalid port (%d)\n", localport );
-		return -1;
-	}
-}
-
-int  sfhip_tcp_got_data( sfhip * hip, int sockno, uint8_t * ip_payload, int ip_payload_length, int max_ip_payload )
-{
-	http * h = https + sockno;
-
-	printf( "Got Data (%c)\n", ip_payload[0] );
-	uint8_t c;
-	uint8_t * p = ip_payload;
-	uint8_t * end = p + ip_payload_length;
-	httpparsestate s = h->state;
-	while( p != end )
-	{
-		// TODO: Would be fun to make this a tiny table.
-		c = *(p++);
-		switch( s )
-		{
-		case HTP_START:
-			if( c == ' ' ) s = HTP_URL;
-			break;
-		case HTP_URL:
-			if( c == ' ' ) s = HTP_POSTURL;
-			else if( c == '\r' ) s = HTP_BACKNEXP;
-			else printf( "%c", c );
-			break;
-		case HTP_BACKNEXP:
-			if( c == '\n' ) s = HTP_LINEFIRST;
-			else s = HTP_ERROR;
-			break;
-		case HTP_LINEFIRST:
-			if( c == '\r' ) s = HTP_BACKNEXPEND;
-			else s = HTP_LINE;
-			break;
-		case HTP_POSTURL:
-			if( c == '\r' ) s = HTP_BACKNEXP;
-			break;
-		case HTP_LINE:
-			if( c == '\r' ) s = HTP_BACKNEXP;
-			break;
-		case HTP_BACKNEXPEND:
-			if( c == '\n' ) s = HTP_REQUEST_COMPLETE;
-			else s = HTP_ERROR;
-			break;
-		default:
-			break;
-		}
-	}
-
-	if( s == HTP_REQUEST_COMPLETE )
-	{
-		printf( "\nComplete\n" );
-	}
-	printf( "State: %d\n", s );
-	h->state = s;
-	return 0;
-}
-
-int  sfhip_tcp_send_done( sfhip * hip, int sockno, uint8_t * ip_payload, int max_ip_payload )
-{
-	http * h = https + sockno;
-
-	printf( "Send Done\n" );
-	if( h->state == HTP_REQUEST_COMPLETE )
-		h->state = HTP_HEADER_REPLY_SENT;
-	return 0;
-}
-
-void sfhip_tcp_socket_closed( sfhip * hip, int sockno )
-{
-	printf( "Socket Closed\n" );
-}
-
-int  sfhip_tcp_can_send( sfhip * hip, int sockno, uint8_t * ip_payload, int max_ip_payload, int retry )
-{
-
-	http * h = https + sockno;
-
-	if( h->state == HTP_REQUEST_COMPLETE )
-	{
-		sprintf( ip_payload, "HTTP/1.0 200 OK\r\nContent-type: text/html\r\n\r\n" );
-		return 1460;
-	}
-	else if( h->state == HTP_HEADER_REPLY_SENT )
-	{
-		return 1460;
-	}
-	else
-	{
-		return 0;
-	}
-/*
-	static int c;
-	ip_payload[0] = 'X';
-	ip_payload[1] = '\n';
-*/
-
-/*
-	c++;
-	if( c & 1 )
-		return 2;
-	else
-		return -1;
-*/
-}
-
-int main( int argc, char ** argv )
-{
-	int64_t runtime = 0;
-
-	printf( "Main started\n" );
-	printf( "Link Force Symbol: %p\n", &sfhip_accept_packet );
-	printf( "Link Force Symbol: %p\n", &sfhip_tick );
-	printf( "Link Force Symbol: %p\n", &sfhip_send_packet );
-
-	if( argc < 3 )
-		goto failhelp;
-
-	if( argc > 3 )
-	{
-		runtime = atoi( argv[3] ) * 1000ULL;
-		printf( "Timing out after %ld ms\n", runtime );
-	}
 
 	fflush(stdout);
 
-	#define TAP_ADDR "192.168.14.252"
-	sfhip hip = {
-		.ip =      HIPIP( 192, 168,  14, 251 ),
-		.mask =    HIPIP( 255, 255, 255, 0   ),
-		.gateway = HIPIP( 192, 168,  14, 1   ),
-		.self_mac = { 0xf0, 0x11, 0x22, 0x33, 0x44, 0x55 },
-		.hostname = "sfhip_test_linux",
-	};
-
 	{
-		const char * devname = argv[1];
+		const char * devname = devname_tap;
 
 		if( strcmp( devname, "-" ) == 0 )
 		{
@@ -310,7 +136,7 @@ int main( int argc, char ** argv )
 	}
 
 	{
-		const char * devname = argv[2];
+		const char * devname = devname_eth;
 
 		if( strcmp( devname, "-" ) == 0 )
 		{
@@ -365,11 +191,6 @@ int main( int argc, char ** argv )
 		}
 	}
 
-	uint64_t last_time = 0;
-    struct timespec monotime;
-    clock_gettime(CLOCK_MONOTONIC_RAW, &monotime);
-	uint64_t ms = (monotime.tv_nsec/1000000ULL) + (monotime.tv_sec*1000ULL);
-	last_time = ms;
 
 	do
 	{
@@ -394,24 +215,11 @@ int main( int argc, char ** argv )
 				int r = read( fds[i].fd, buf + offset, 2048 );
 				if( r < 0 )
 					FAIL( "read() failed %s\n", strerror( errno ) );
-				sfhip_accept_packet( &hip, (sfhip_phy_packet_mtu *)buf, r + offset );
+				linux_got_packet( buf, r + offset );
 			}
 		}
 
-	    clock_gettime(CLOCK_MONOTONIC_RAW, &monotime);
-		uint64_t ms = (monotime.tv_nsec/1000000ULL) + (monotime.tv_sec*1000ULL);
-		int delta_ms = ms - last_time;
-
-		sfhip_phy_packet_mtu scratch;
-		sfhip_tick( &hip, &scratch, delta_ms );
-		
-		if( runtime )
-		{
-			runtime -= delta_ms;
-			if( runtime <= 0 ) return 0;
-		}
-
-		last_time = ms;
+		linux_tick_callback();
 
 #if 0
 		printf( "%4d: ", r );
@@ -426,8 +234,5 @@ int main( int argc, char ** argv )
 	} while( 1 );
 
 	return 0;
-failhelp:
-	FAIL( "Usage: [tool] [tunX|tapX|-] [ethernet_dev|-]\n" );
-	return -1;
 }
 

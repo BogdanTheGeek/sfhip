@@ -54,6 +54,10 @@
 #define SFHIP_EMIT_TCP_CHECKSUM 1
 #endif
 
+#ifndef SFHIP_WARN
+#define SFHIP_WARN(x...)
+#endif
+
 ///////////////////////////////////////////////////////////////////////////////
 // Internal
 
@@ -112,7 +116,6 @@
 #define SFHIP_TCP_MODE_SENT_SYN_ACK  1
 #define SFHIP_TCP_MODE_ESTABLISHED   2
 #define SFHIP_TCP_MODE_CLOSING_WAIT  3
-#define SFHIP_TCP_MODE_CLOSING_WAIT2 4
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -213,14 +216,14 @@ typedef struct
 {
 	void * opaque;
 
-	sfhip_address remote_address;
+	sfhip_address remote_address; // this being nonzero is what determines if a socket is active or not.
 	hipbe16       local_port;
 	hipbe16       remote_port;
 	uint32_t      seq_num;
 	uint32_t      ack_num;
 	hipmac        remote_mac;
 	uint16_t      retry;
-	uint32_t      pending_send_time; //XXX TODO
+	uint32_t      pending_send_time;
 	uint16_t      pending_send_size;
 	uint8_t       mode; // SFHIP_TCP_MODE_*
 	uint8_t       retry_number;
@@ -276,11 +279,10 @@ void sfhip_got_dhcp_lease( sfhip * hip, sfhip_address addr );
 #if SFHIP_TCP_SOCKETS
 int  sfhip_tcp_accept_connection( sfhip * hip, int sockno, int localport, hipbe32 remote_host ); // return 0 to accept, -1 to abort.
 int  sfhip_tcp_got_data( sfhip * hip, int sockno, uint8_t * ip_payload, int ip_payload_length, int max_ip_payload );
-int  sfhip_tcp_send_done( sfhip * hip, int sockno, uint8_t * ip_payload, int max_ip_payload );
 void sfhip_tcp_socket_closed( sfhip * hip, int sockno );
 
 // Like send_done, but for polling.
-int  sfhip_tcp_can_send( sfhip * hip, int sockno, uint8_t * ip_payload, int max_ip_payload, int retry );
+int  sfhip_tcp_send_event( sfhip * hip, int sockno, uint8_t * ip_payload, int max_ip_payload, int confirmed_last_send );
 #endif
 
 // Constants
@@ -701,9 +703,9 @@ int sfhip_send_tcp_packet( sfhip * hip, sfhip_phy_packet_mtu * pkt, int payload_
 	sfhip_ip_header * ip = (sfhip_ip_header *)( (&pkt->mac_header) +1);
 	sfhip_tcp_header * tcp = (sfhip_tcp_header *)(ip+1);
 
-	flags |= SFHIP_TCP_SOCKETS_FLAG_ACK;
-
 	int optionadd = 0;
+
+	// uip does this... not sure why.
 	if( flags & SFHIP_TCP_SOCKETS_FLAG_SYN )
 	{
 		payload_length = 4;
@@ -713,15 +715,17 @@ int sfhip_send_tcp_packet( sfhip * hip, sfhip_phy_packet_mtu * pkt, int payload_
 			sizeof(sfhip_phy_packet) - 18 /* to just make it a smoler */) );
 	}
 
-	tcp->flags = HIPHTONS( ((uint8_t)flags) | (((sizeof(sfhip_tcp_header) + optionadd)>>2)<<12) );
-
 	tcp->source_port = sock->local_port;
 	tcp->destination_port = sock->remote_port;
-	tcp->seqno = HIPHTONL( sock->seq_num ); printf( "USING: %u\n", sock->seq_num );
+	tcp->seqno = HIPHTONL( sock->seq_num );
 	tcp->ackno = HIPHTONL( sock->ack_num );
 	tcp->window = HIPHTONS( SFHIP_MTU - sizeof(sfhip_tcp_header) - sizeof(sfhip_ip_header) - sizeof(sfhip_phy_packet) );
 	tcp->checksum = 0;
 	tcp->urgent = 0;
+
+	flags |= SFHIP_TCP_SOCKETS_FLAG_ACK;
+
+	tcp->flags = HIPHTONS( ((uint8_t)flags) | (((sizeof(sfhip_tcp_header) + optionadd)>>2)<<12) );
 
 	ip->length = HIPHTONS( sizeof( sfhip_ip_header ) + sizeof( sfhip_tcp_header ) + payload_length );
 
@@ -805,7 +809,7 @@ int sfhip_handle_tcp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
 	// If we do need to abort, it will be initialized later.
 	tcp_socket sabort;
 
-	if( ( flags & SFHIP_TCP_SOCKETS_FLAG_SYN ) || ts == tsend )
+	if( ts == tsend || (flags & SFHIP_TCP_SOCKETS_FLAG_SYN) )
 	{
 		int i;
 
@@ -821,6 +825,9 @@ int sfhip_handle_tcp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
 			// packets that don't match the filter.  So if they
 			// are non-syn packets, then, we should immediately
 			// drop the connection.
+
+			int o = -1;
+
 			if( flags & SFHIP_TCP_SOCKETS_FLAG_SYN )
 			{
 				ts = hip->tcps;
@@ -838,14 +845,12 @@ int sfhip_handle_tcp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
 						break;
 					}
 				} while( 1 );
-			}
-			else
-			{
-				ts = &sabort;
+
+				o = sfhip_tcp_accept_connection( hip, sockno, HIPNTOHS( tcp->destination_port ), sender );
 			}
 
-			int o = sfhip_tcp_accept_connection( hip, sockno, HIPNTOHS( tcp->destination_port ), sender );
-
+			// This will get triggered if the application rejects the connection, or
+			// if we have a totally unsolicited message
 			if( o < 0 ) 
 			{
 				ts = &sabort;
@@ -859,24 +864,29 @@ int sfhip_handle_tcp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
 				.ack_num = HIPNTOHL( tcp->seqno ),
 				.remote_mac = data->mac_header.source,
 			};
-
 		}
 		else
 		{
+			// We have a matching packet.  But we got a repeated SYN.
+
 			ts->ack_num = HIPNTOHL( tcp->seqno );
 			ts->remote_mac = data->mac_header.source;
 		}
 
-		ts->ack_num++;
-
-		// No socket allocated, need to abort.
+		// No socket allocated, need to abort. This could be either because
+		// we were not granted a socket, or, we got a non-syn packet.
 		if( ts == &sabort )
 		{
-			replyflag = SFHIP_TCP_SOCKETS_FLAG_RESET;
-			goto send_reply_addheader;
+			payload_output = -2;
+		}
+		else
+		{
+			replyflag = SFHIP_TCP_SOCKETS_FLAG_SYN;
 		}
 
-		replyflag = SFHIP_TCP_SOCKETS_FLAG_SYN;
+		ts->ack_num++;
+
+		// Increment seq because we are sending a synack.
 		ts->mode = SFHIP_TCP_MODE_SENT_SYN_ACK;
 		ts->seq_num++;
 
@@ -891,61 +901,41 @@ int sfhip_handle_tcp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
 	int max_tcp_payload = SFHIP_MTU - sizeof( sfhip_mac_header ) -
 		sizeof( sfhip_ip_header ) - sizeof( sfhip_tcp_header );
 
-	if( flags & SFHIP_TCP_SOCKETS_FLAG_ACK )
-	{
-		uint32_t ackno = HIPNTOHL( tcp->ackno );
-		int ackdiff = ackno - ts->seq_num;
-
-		if( ts->mode == SFHIP_TCP_MODE_SENT_SYN_ACK )
-		{
-			printf( "%u %u %u DIFF on ACK %u\n", ackno, ts->ack_num, ts->seq_num, ackdiff );
-			if( ackdiff == 1 )
-			{
-				ts->mode = SFHIP_TCP_MODE_ESTABLISHED;
-				ts->seq_num = ackno;
-				printf( "Assigning seq_num=%u\n", ackno );
-				payload_output = 0;
-			}
-		}
-		else if( ts->mode == SFHIP_TCP_MODE_ESTABLISHED )
-		{
-			if( ts->pending_send_size )
-			{
-				printf( "Pending Diff: Check me: %d %d (will need to fixup if clause)\n", ackdiff, ts->pending_send_size );
-				payload_output = sfhip_tcp_send_done( hip, sockno,
-					ip_payload, max_tcp_payload );
-				if( payload_output )
-					max_tcp_payload = 0;
-				ts->pending_send_size = 0;
-			}
-			printf( "Established ack %d %d\n", ackdiff, ts->pending_send_size );
-		}
-		else if( ts->mode == SFHIP_TCP_MODE_CLOSING_WAIT )
-		{
-			// I think this is for clients?
-			printf( "Closing mode wait %d\n", ackdiff );
-			if( ackdiff == 1 )
-			{
-				ts->mode == SFHIP_TCP_MODE_CLOSING_WAIT2;
-			}
-		}
-
-		printf( "ackdiff: %d (%d)\n", ackdiff, ts->mode );
-		// Acking data?
-	}
 
 	uint32_t seqno = HIPNTOHL( tcp->seqno );
+	uint32_t ackno = HIPNTOHL( tcp->ackno );
+
+	// Tricky - this has to be here, because if the remote side
+	// sends us an ack, but we miss it, we can get stuck in this
+	// mode. Remote sides have no way of confirming we received
+	// an ack.  So, we assume that we dropped it and we can pick
+	// up with the next PSH.
+
+	if( ts->mode == SFHIP_TCP_MODE_SENT_SYN_ACK )
+	{
+		int ackdiff = ackno - ts->seq_num;
+
+		if( ackdiff == 1 )
+		{
+			ts->mode = SFHIP_TCP_MODE_ESTABLISHED;
+			ts->seq_num = ackno;
+		}
+		else
+		{
+			SFHIP_WARN( "ACK Disagreement on SYN (%d)\n", ackdiff );
+		}
+	}
+
 
 	if( flags & SFHIP_TCP_SOCKETS_FLAG_PSH )
 	{
 		if( ts->mode != SFHIP_TCP_MODE_ESTABLISHED )
 		{
-			replyflag = SFHIP_TCP_SOCKETS_FLAG_RESET;
+			payload_output = -2;
 			goto send_reply;
 		}
 
 		int seqdiff = seqno - ts->ack_num;
-		printf( "PUSH: %d %d\n", seqdiff, ip_payload_length );
 
 		// If the packet from them to us was dropped, we still need
 		// to ack it.
@@ -955,39 +945,87 @@ int sfhip_handle_tcp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
 		{
 			// We can accept it.
 			ts->ack_num += ip_payload_length;
-			printf( "ACCEPTING SEQNO: %d seqdiff = 0\n", ts->ack_num );
-
 			payload_output = sfhip_tcp_got_data( hip, sockno,
 				ip_payload, ip_payload_length, max_tcp_payload );
+			if( payload_output < 0 )
+				goto send_reply;
 		}
 
 		goto send_reply;
+	}
+
+	if( flags & SFHIP_TCP_SOCKETS_FLAG_ACK )
+	{
+		int ackdiff = ackno - ts->seq_num;
+
+		if( ts->mode == SFHIP_TCP_MODE_ESTABLISHED )
+		{
+			if( ts->pending_send_size )
+			{
+				if( ackdiff != ts->pending_send_size )
+				{
+					SFHIP_WARN( "ACK Disagreement on established connection (%d, %d)\n", ackdiff, ts->pending_send_size );
+				}
+				else
+				{
+					ts->seq_num = ackno;
+					payload_output = sfhip_tcp_send_event( hip, sockno, ip_payload, payload_output ? 0 : max_tcp_payload, 1 );
+					if( payload_output < 0 )
+						goto send_reply;
+
+					ts->pending_send_size = 0;
+					ts->pending_send_time = 0;
+				}
+			}
+		}
+		else if( ts->mode == SFHIP_TCP_MODE_CLOSING_WAIT )
+		{
+			// Connection finished closing.
+			ts->remote_address = 0;
+		}
 	}
 
 	if( flags & SFHIP_TCP_SOCKETS_FLAG_FIN )
 	{
 		replyflag = 0;
 		ts->ack_num = seqno + 1;
+		ts->seq_num++;
+
 		ts->mode = SFHIP_TCP_MODE_CLOSING_WAIT;
 
 		payload_output = 0;
-		replyflag = 0;
+		replyflag = SFHIP_TCP_SOCKETS_FLAG_FIN;
 
 		// Remote side closed our connection.
 		sfhip_tcp_socket_closed( hip, sockno );
+
 		goto send_reply;
 	}
 
 	return 0;
+
 send_reply_addheader:
 	sfhip_make_tcp_packet( hip, data, ts );
 
 send_reply:
-	if( payload_output )
+	if( payload_output > 0 )
 	{
 		replyflag |= SFHIP_TCP_SOCKETS_FLAG_PSH;
-		printf("************** %d\n", payload_output );
 		ts->pending_send_size = payload_output;
+	}
+	else if( payload_output < -1 )
+	{
+		replyflag = SFHIP_TCP_SOCKETS_FLAG_RESET;
+		ts->remote_address = 0;
+		ts->seq_num = HIPHTONL(tcp->ackno);
+		payload_output = 0;
+	}
+	else if( payload_output == -1 )
+	{
+		replyflag |= SFHIP_TCP_SOCKETS_FLAG_FIN;
+		ts->mode = SFHIP_TCP_MODE_CLOSING_WAIT;
+		ts->pending_send_size = 1;
+		payload_output = 0;
 	}
 	return sfhip_send_tcp_packet( hip, data, payload_output, ts, replyflag );
 }
@@ -1176,6 +1214,9 @@ int sfhip_tick( sfhip * hip, sfhip_phy_packet_mtu * scratch, int dt_ms )
 		{
 			if( ss->remote_address )
 			{
+				// XXX: TODO: Handle when ss->retry_number overflows.
+				// XXX: TODO: Handle keep-alives, and keep-alive probes.
+				// XXX: TODO: Adjust ss->pending_send_time to account for the need for keep-alives.
 				if( ss->mode == SFHIP_TCP_MODE_ESTABLISHED )
 				{
 
@@ -1189,7 +1230,7 @@ int sfhip_tick( sfhip * hip, sfhip_phy_packet_mtu * scratch, int dt_ms )
 						int retry = ss->pending_send_size;
 						if( retry ) ss->retry_number++;
 
-						sent = sfhip_tcp_can_send( hip, socket_number, tcp_payload_buffer, max_tcp_payload, retry );
+						sent = sfhip_tcp_send_event( hip, socket_number, tcp_payload_buffer, max_tcp_payload, 0 );
 
 						if( sent )
 						{
@@ -1200,13 +1241,38 @@ int sfhip_tick( sfhip * hip, sfhip_phy_packet_mtu * scratch, int dt_ms )
 						}
 						ss->pending_send_time = 0;
 					}
-					if( ss->pending_send_size )
-						ss->pending_send_time+= dt_ms;
 				}
 				else
 				{
-					// TODO: Handle other modes, for timeout.
+					if( ss->pending_send_time > (ss->retry_number+1)<<8 )
+					{
+						int retry = ss->retry_number++;
+						sfhip_make_tcp_packet( hip, scratch, ss );
+
+						int flagtype = 0;
+						if( ss->mode == SFHIP_TCP_MODE_CLOSING_WAIT )
+							flagtype = SFHIP_TCP_SOCKETS_FLAG_FIN;
+						else if( ss->mode == SFHIP_TCP_SOCKETS_FLAG_SYN )
+							flagtype = SFHIP_TCP_SOCKETS_FLAG_SYN;
+						else
+						{
+							SFHIP_WARN( "Invalid state recorded inside of sfhip_tick for TCP (%d)\n", ss->mode );
+						}
+
+						sfhip_send_tcp_packet( hip, scratch, 0, ss, flagtype );
+						ss->pending_send_size = 1;
+
+						if( retry >= 5 )
+						{
+							// Actually kill off connection.
+							ss->remote_address = 0;
+						}
+						goto done;
+					}
 				}
+
+				if( ss->pending_send_size )
+					ss->pending_send_time+= dt_ms;
 			}
 		}
 		ss++; socket_number++;
