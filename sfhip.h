@@ -1088,7 +1088,7 @@ int sfhip_handle_tcp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
 					ts->pending_send_size = 0;
 					ts->pending_send_time = 0;
 					ts->seq_num = ackno;
-					acked = 1;
+					acked = ackdiff;
 				}
 			}
 		}
@@ -1128,7 +1128,8 @@ int sfhip_handle_tcp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
 		else
 			cansend =0;
 
-		payload_output = sfhip_tcp_event( hip, sockno, ip_payload, received_payload, cansend, acked );
+		payload_output = sfhip_tcp_event( hip, sockno, ip_payload,
+			received_payload, cansend, acked );
 
 		// Tricky: If we had a PSH, and no reply, we still need to send an ACK
 		if( payload_output == 0 && (flags & SFHIP_TCP_SOCKETS_FLAG_PSH) )
@@ -1140,8 +1141,8 @@ int sfhip_handle_tcp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
 	if( flags & SFHIP_TCP_SOCKETS_FLAG_FIN )
 	{
 		ts->ack_num = seqno + 1;
-		//ts->seq_num++; // Need to spend a seq on the fin.
-		ts->pending_send_size = 1;
+
+		ts->pending_send_size = 1; // FIN counts as size.
 
 		ts->mode = SFHIP_TCP_MODE_CLOSING_WAIT;
 
