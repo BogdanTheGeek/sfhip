@@ -1350,21 +1350,39 @@ int sfhip_tick( sfhip * hip, sfhip_phy_packet_mtu * scratch, int dt_ms )
 		{
 			if( ss->remote_address )
 			{
-				// XXX: TODO: Handle when ss->retry_number overflows.
-				// XXX: TODO: Handle keep-alives, and keep-alive probes.
-				// XXX: TODO: Adjust ss->pending_send_time to account for the need for keep-alives.
+				int retry_number = ss->retry_number;
+
+				// TODO: can these be refactored?
+
 				if( ss->mode == SFHIP_TCP_MODE_ESTABLISHED )
 				{
-
 					// Slow standoff, or waiting for someone to send data.
-					if( !ss->pending_send_size || ss->pending_send_time > (ss->retry_number+1)<<8 )
+					if( !ss->pending_send_size ||
+						 ss->pending_send_time > (retry_number+1)<<8 )
 					{
+						// This is called whenever we are free to send, OR, we
+						// have waited a long time for an ACK and yet no ACK is
+						// present.
 						uint8_t * tcp_payload_buffer = (uint8_t*)((sfhip_tcp_header*)(((sfhip_ip_header*)scratch->payload)+1)+1);
 
-						int retry = ss->pending_send_size;
-						if( retry ) ss->retry_number++;
+						int retrying = ss->pending_send_size;
 
-						sent = sfhip_tcp_event( hip, socket_number, tcp_payload_buffer, 0, max_tcp_payload, 0 );
+						if( retrying )
+						{
+							retry_number++;
+							ss->retry_number = retry_number;
+						}
+
+						if( retry_number > 15 )
+						{
+							// Kill off connection.
+							sent = SFHIP_TCP_OUTPUT_RESET;
+							ss->remote_address = 0;
+						}
+						else
+						{
+							sent = sfhip_tcp_event( hip, socket_number, tcp_payload_buffer, 0, max_tcp_payload, 0 );
+						}
 
 						if( sent )
 						{
@@ -1376,9 +1394,8 @@ int sfhip_tick( sfhip * hip, sfhip_phy_packet_mtu * scratch, int dt_ms )
 				}
 				else
 				{
-					if( ss->pending_send_time > (ss->retry_number+1)<<8 )
+					if( ss->pending_send_time > (retry_number+1)<<8 )
 					{
-						int retry = ss->retry_number++;
 
 						int sent = 0;
 						if( ss->mode == SFHIP_TCP_MODE_CLOSING_WAIT )
@@ -1390,13 +1407,19 @@ int sfhip_tick( sfhip * hip, sfhip_phy_packet_mtu * scratch, int dt_ms )
 							SFHIP_WARN( "Invalid state recorded inside of sfhip_tick for TCP (%d)\n", ss->mode );
 						}
 
-						sfhip_makeandsend_tcp_packet( hip, scratch, sent, ss );
-
-						if( retry >= 5 )
+						if( retry_number >= 15 )
 						{
 							// Actually kill off connection.
 							ss->remote_address = 0;
 						}
+						else
+						{
+							sfhip_makeandsend_tcp_packet( hip, scratch, sent, ss );
+						}
+
+
+						ss->retry_number = retry_number+1;
+
 						goto done;
 					}
 				}
