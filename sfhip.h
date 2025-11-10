@@ -111,6 +111,7 @@ IF YOU HAVE SFHIP_TCP_SOCKETS you must implement:
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifndef HIP_PHY_HEADER_LENGTH_BYTES
 #define HIP_PHY_HEADER_LENGTH_BYTES 0
@@ -400,7 +401,7 @@ int sfhip_ip_reply( sfhip * hip, sfhip_phy_packet * data, int length );
 
 
 
-hipmac sfhip_mac_broadcast = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+hipmac sfhip_mac_broadcast = {{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }};
 
 int sfhip_mac_reply( sfhip * hip, sfhip_phy_packet * data, int length )
 {
@@ -547,7 +548,7 @@ int sfhip_dhcp_client_request( sfhip * hip, sfhip_phy_packet_mtu * scratch )
 
 	if( !hip->need_to_discover && (hip->tries_before_discover++) > 3 )
 	{
-		hip->need_to_discover = 1;
+		hip->need_to_discover = true;
 	}
 
 	*req_packet = (sfhip_phy_packet_dhcp_request){
@@ -633,7 +634,7 @@ int sfhip_dhcp_handle( sfhip * hip, sfhip_phy_packet_mtu * original_packet, uint
 
 	// Need +2 to be able to read the code + length for first
 	// DHCP entry.
-	if( length < sizeof( dhcp_reply ) + 2 ) return -1;
+	if( (size_t)length < sizeof( dhcp_reply ) + 2 ) return -1;
 
 	dhcp_reply * d = (dhcp_reply*)data;
 
@@ -670,7 +671,7 @@ int sfhip_dhcp_handle( sfhip * hip, sfhip_phy_packet_mtu * original_packet, uint
 			if( dhcp_type == 6 )
 			{
 				// NAK: If nak, try to get an IP without preconception.
-				hip->need_to_discover = 1;
+				hip->need_to_discover = true;
 
 				// Re-request immediately.
 				sfhip_dhcp_client_request( hip, original_packet );
@@ -698,7 +699,7 @@ int sfhip_dhcp_handle( sfhip * hip, sfhip_phy_packet_mtu * original_packet, uint
 
 	if( dhcp_type == 2 && dhcp_offer_router && dhcp_offer_mask && d->your_client_address )
 	{
-		hip->need_to_discover = 0;
+		hip->need_to_discover = false;
 		hip->tries_before_discover = 0;
 		hip->ip = d->your_client_address;
 		hip->mask = dhcp_offer_mask;
@@ -736,6 +737,8 @@ int sfhip_dhcp_handle( sfhip * hip, sfhip_phy_packet_mtu * original_packet, uint
 int sfhip_handle_udp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
 	void * ip_payload, int ip_payload_length )
 {
+	(void)length; // unused
+
 	sfhip_udp_header * udp = ip_payload;
 
 	int payload_remain = ip_payload_length - sizeof(sfhip_udp_header);
@@ -791,6 +794,8 @@ int sfhip_make_tcp_packet( sfhip * hip, sfhip_phy_packet_mtu * pkt, tcp_socket *
 	sfhip_mac_header * mac = &pkt->mac_header;
 	sfhip_ip_header * ip = (sfhip_ip_header *)(mac+1);
 	sfhip_tcp_header * tcp = (sfhip_tcp_header *)(ip+1);
+
+	(void)tcp; // unused for now.
 
 	ip->destination_address = sock->remote_address;
 
@@ -901,6 +906,7 @@ int sfhip_makeandsend_tcp_packet( sfhip * hip, sfhip_phy_packet_mtu * pkt, sfhip
 int sfhip_handle_tcp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
 	void * ip_payload, int ip_payload_length )
 {
+	(void)length; // unused
 	sfhip_tcp_header * tcp = ip_payload;
 
 	if( ip_payload_length - sizeof( sfhip_tcp_header ) < 0 ) return -1;
@@ -954,8 +960,6 @@ int sfhip_handle_tcp( sfhip * hip, sfhip_phy_packet_mtu * data, int length,
 
 	if( ts == tsend || (flags & SFHIP_TCP_SOCKETS_FLAG_SYN) )
 	{
-		int i;
-
 		// This is funky because we might be in a situation where
 		// the syn packet from the remote side was lost.  If so
 		// we have to just accept the new packet.  And even more
@@ -1223,7 +1227,7 @@ int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet_mtu * data, int length )
 
 		if( protocol == SFHIP_IPPROTO_ICMP )
 		{
-			if( ip_payload_length < sizeof( sfhip_icmp_header ) )
+			if( (size_t)ip_payload_length < sizeof( sfhip_icmp_header ) )
 				return -1;
 
 			sfhip_icmp_header * icmp = ip_payload;
@@ -1261,7 +1265,7 @@ int sfhip_accept_packet( sfhip * hip, sfhip_phy_packet_mtu * data, int length )
 			if( iph->destination_address == hip->ip )
 				return sfhip_handle_tcp( hip, data, length, ip_payload, ip_payload_length );
 		}
-		default:
+		default: break;
 		}
 
 		return 0;
@@ -1358,7 +1362,7 @@ int sfhip_tick( sfhip * hip, sfhip_phy_packet_mtu * scratch, int dt_ms )
 				{
 					// Slow standoff, or waiting for someone to send data.
 					if( !ss->pending_send_size ||
-						 ss->pending_send_time > (retry_number+1)<<8 )
+						 ss->pending_send_time > (uint32_t)(retry_number+1)<<8 )
 					{
 						// This is called whenever we are free to send, OR, we
 						// have waited a long time for an ACK and yet no ACK is
@@ -1394,7 +1398,7 @@ int sfhip_tick( sfhip * hip, sfhip_phy_packet_mtu * scratch, int dt_ms )
 				}
 				else
 				{
-					if( ss->pending_send_time > (retry_number+1)<<8 )
+					if( ss->pending_send_time > (uint32_t)(retry_number+1)<<8 )
 					{
 
 						int sent = 0;
