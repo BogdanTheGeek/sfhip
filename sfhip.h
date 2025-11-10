@@ -74,7 +74,7 @@ IF YOU ENABLE SFHIP_DHCP_CLIENT
 IF YOU HAVE SFHIP_TCP_SOCKETS you must implement:
 
   A function to accept or reject connections. This will be called and you must
-  return 0 to accept, -1 to abort the connection.
+  return 1 to accept, 0 to abort the connection.
 
     int sfhip_tcp_accept_connection( sfhip * hip, int sockno, int localport,
 	  hipbe32 remote_host );
