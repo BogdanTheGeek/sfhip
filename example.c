@@ -37,7 +37,8 @@ typedef enum
 	HTP_LINE,
 	HTP_BACKNEXPEND,
 	HTP_REQUEST_COMPLETE,
-	HTP_HEADER_SENT,
+	HTP_HEADER_SENDING,
+	HTP_BODY_SENDING,
 	HTP_ERROR,
 	HTP_TESTING_END,
 } httpparsestate;
@@ -72,7 +73,7 @@ int  sfhip_tcp_accept_connection( sfhip * hip, int sockno, int localport, hipbe3
 	}
 }
 
-sfhip_length_or_tcp_code sfhip_tcp_got_data( sfhip * hip, int sockno, uint8_t * ip_payload, int ip_payload_length, int max_ip_payload )
+sfhip_length_or_tcp_code sfhip_tcp_event( sfhip * hip, int sockno, uint8_t * ip_payload, int ip_payload_length, int max_ip_payload, int acked )
 {
 	http * h = https + sockno;
 
@@ -122,47 +123,52 @@ sfhip_length_or_tcp_code sfhip_tcp_got_data( sfhip * hip, int sockno, uint8_t * 
 		}
 	}
 
-	if( s == HTP_REQUEST_COMPLETE )
+
+	int ret = 0;
+
+	// If we can send data back.
+	if( acked )
 	{
+		if( s == HTP_HEADER_SENDING )
+		{
+			s = HTP_BODY_SENDING;
+		}
+		else if( s == HTP_BODY_SENDING )
+		{
+			int sno = h->sendno++;
+			if( sno == 10 )
+			{
+				s = HTP_TESTING_END;
+			}
+		}
+	}
+
+
+	if( s == HTP_REQUEST_COMPLETE && max_ip_payload )
+	{
+		if( max_ip_payload )
+		{
+			// Can send, advance.
+			s = HTP_HEADER_SENDING;
+		}
 		printf( "\nReceived Request\n" );
 	}
+
 	h->state = s;
-	return 0;
-}
 
-sfhip_length_or_tcp_code sfhip_tcp_send_event( sfhip * hip, int sockno, uint8_t * ip_payload, int max_ip_payload, int confirmed_last_send )
-{
-	http * h = https + sockno;
-
-	// Phase one - if TCP send is confirmed, 
-	if( confirmed_last_send )
-	{
-		if( h->state == HTP_REQUEST_COMPLETE )
-		{
-			h->state = HTP_HEADER_SENT;
-		}
-		int sno = h->sendno++;
-		if( sno == 10 )
-		{
-			h->state = HTP_TESTING_END;
-		}
-	}
-
-	// If for some reason we cannot send a message now, abort before sending.
+	// If we can send our message, send it.
 	if( !max_ip_payload ) return 0;
 
-	char c = (h->sendno%10)+'0';
-
+	char pl = (h->sendno%10)+'0';
 
 	// Phase two - send a TCP reply.
-	switch( h->state )
+	switch( s )
 	{
-	case HTP_REQUEST_COMPLETE:
+	case HTP_HEADER_SENDING:
 		int r = sprintf( ip_payload, "HTTP/1.0 200 OK\r\nContent-type: text/html\r\n\r\n" );
-		memset( ip_payload + r, c, 1);// 1460 - r );
-		return r+1;
-	case HTP_HEADER_SENT:
-		memset( ip_payload, c, 1); //1460 );
+		return r;
+	case HTP_BODY_SENDING:
+		memset( ip_payload, pl, 1); //1460 );
 		return 1;
 	case HTP_TESTING_END:
 		return SFHIP_TCP_OUTPUT_FIN;
@@ -170,7 +176,6 @@ sfhip_length_or_tcp_code sfhip_tcp_send_event( sfhip * hip, int sockno, uint8_t 
 		return 0;
 	}
 	return 0;
-
 }
 
 void sfhip_tcp_socket_closed( sfhip * hip, int sockno )
@@ -184,26 +189,23 @@ void sfhip_tcp_socket_closed( sfhip * hip, int sockno )
 
 void linux_got_packet( uint8_t * buf, int length )
 {
-	if( (rand()%10) == 0 ) return;
+//	if( (rand()%5) == 0 ) return;
 
 	sfhip_accept_packet( &hip, (sfhip_phy_packet_mtu *)buf, length );
 }
 
 int sfhip_send_packet( sfhip * hip, sfhip_phy_packet * data, int length )
 {
-	if( (rand()%10) == 0 ) return 0;
+//	if( (rand()%5) == 0 ) return 0;
 
 	return linux_send_packet( (uint8_t*)data, length );
 }
-
-
 
 void linux_tick_callback()
 {
     clock_gettime(CLOCK_MONOTONIC_RAW, &monotime);
 	uint64_t ms = (monotime.tv_nsec/1000000ULL) + (monotime.tv_sec*1000ULL);
 	int delta_ms = ms - last_time;
-
 
 
 	sfhip_phy_packet_mtu scratch;
