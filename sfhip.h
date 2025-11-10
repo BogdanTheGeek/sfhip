@@ -1424,7 +1424,7 @@ int sfhip_tick( sfhip * hip, sfhip_phy_packet_mtu * scratch, int dt_ms )
 				{
 					// Slow standoff, or waiting for someone to send data.
 					if ( !ss->pending_send_size ||
-					     ss->pending_send_time > (uint32_t)( retry_number + 1 ) << 8 )
+					     ss->pending_send_time > ( ( ( uint32_t )retry_number ) + 1 ) << 8 )
 					{
 						// This is called whenever we are free to send, OR, we
 						// have waited a long time for an ACK and yet no ACK is
