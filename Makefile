@@ -44,3 +44,6 @@ testlocal : linuxtest
 clean :
 	rm -rf linuxtest
 
+format:
+	clang-format --style=file -i *.[ch]
+
